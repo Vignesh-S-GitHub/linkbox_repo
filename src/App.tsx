@@ -1,6 +1,7 @@
+import type React from 'react';
 import {useState} from 'react';
 import {Routes,Route,Link,useNavigate} from 'react-router-dom';
-import {ArrowLeft,Download,Eye,File,Folder,HardDrive,Info,Link2,MoreVertical,Music,Play,Plus,Settings,Share2,Video} from 'lucide-react';
+import {ArrowLeft,Download,File,Folder,HardDrive,Info,Link2,MoreVertical,Music,Play,Plus,Settings,Share2,Video} from 'lucide-react';
 import {mockFiles} from './mockData';
 import type {LinkBoxFile} from './types';
 
