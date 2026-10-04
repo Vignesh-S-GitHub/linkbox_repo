@@ -8,5 +8,5 @@ export interface Database {
  listActive():Promise<DownloadRow[]>; findByPublicId(publicId:string):Promise<DownloadRow|null>;
  findActiveByHash(hash:string):Promise<DownloadRow|null>; create(row:DownloadRow):Promise<DownloadRow>;
  update(row:DownloadRow,expectedCleanupClaim?:string|null):Promise<DownloadRow>;
- claimForCleanup(publicId:string,now:string):Promise<DownloadRow|null>; listExpired(now:string):Promise<DownloadRow[]>;
+ claimForCleanup(publicId:string,now:string,ownerSessionHash?:string):Promise<DownloadRow|null>; listExpired(now:string):Promise<DownloadRow[]>;
 }

@@ -16,7 +16,7 @@ export class MockSeedrAdapter implements SeedrAdapter {
     for (const row of mockRows()) {
       this.items.set(row.seedrItemId, { itemId: row.seedrItemId, accountId: row.seedrAccountId,
         displayName: row.displayName, sizeBytes: row.sizeBytes, status: row.status,
-        progress: row.progress, playable: row.playable, startedAt: Date.now(), initialProgress: row.progress });
+        progress: row.progress, playable: row.playable, kind: row.kind, fileCount: row.fileCount, startedAt: Date.now(), initialProgress: row.progress });
     }
   }
   async syncAccounts() { this.tick(); return structuredClone(this.accounts); }
@@ -32,7 +32,7 @@ export class MockSeedrAdapter implements SeedrAdapter {
     if (!account || !info.sizeBytes || account.availableBytes < info.sizeBytes) throw new Error("Not enough space");
     const item: MockItem = { ...info, itemId: `mock-${crypto.randomUUID()}`, accountId,
       status: "fetching_metadata", progress: 0, initialProgress: 0, startedAt: Date.now(),
-      playable: ["video", "audio"].includes(fileKind(info.displayName)) };
+      playable: ["video", "audio"].includes(fileKind(info.displayName)), kind: fileKind(info.displayName) };
     this.items.set(item.itemId, item);
     account.usedBytes += item.sizeBytes;
     account.availableBytes -= item.sizeBytes;

@@ -2,7 +2,7 @@ import type { ApiError, StorageFullFile, StorageSummary } from "@temporary-share
 import { accountsFromEnv, maxActiveDownloads, maxFileBytes } from "./config";
 import { databaseFor } from "./database/factory";
 import type { Database } from "./database/database";
-import { deleteCommunityItem, expireDueItems } from "./cleanup/cleanup-service";
+import { deleteCommunityItem, deleteOwnedItem, expireDueItems } from "./cleanup/cleanup-service";
 import { LiveSeedrAdapter } from "./seedr/live-adapter";
 import { MockSeedrAdapter } from "./seedr/mock-adapter";
 import type { SeedrAdapter } from "./seedr/adapter";
@@ -11,6 +11,7 @@ import type { AccountState, DownloadRow, Env } from "./types";
 import { publicDownload } from "./types";
 import { ApiProblem, magnetIdentity, sha256, validateMagnet } from "./utils/magnet";
 import { readJsonBody } from "./utils/request-body";
+import { ownsDownload, requestOwnerHash } from "./utils/owner";
 
 // Only synthetic local demo state lives in memory. Live coordination lives in D1.
 let mockAdapter: MockSeedrAdapter | undefined;
@@ -49,10 +50,18 @@ async function refreshRows(database: Database, adapter: SeedrAdapter, env: Env) 
   const result: DownloadRow[] = []; let refreshed = 0;
   // Sequential bounded work avoids exhausting the free Worker's subrequest limit.
   for (const row of rows) {
-    if (["ready", "failed", "deleted", "expired", "deleting"].includes(row.status) || row.expiresAt <= new Date().toISOString() ||
-        refreshed >= 2 || !await database.acquireLease(`poll:${row.publicId}`, Date.now(), 15000)) { result.push(row); continue; }
+    const reconcile = row.status === "ready" && !row.kind;
+    if ((!reconcile && ["ready", "failed", "deleted", "expired", "deleting"].includes(row.status)) || row.expiresAt <= new Date().toISOString() ||
+        refreshed >= 2 || !await database.acquireLease(`poll:${row.publicId}`, Date.now(), reconcile ? 300000 : 15000)) { result.push(row); continue; }
     refreshed++;
     try {
+      if (reconcile) {
+        // Read-only backfill for existing ready items. Do not replay tasks,
+        // reset lifetimes or delete anything during type reconciliation.
+        const contents = await adapter.contents(row.seedrAccountId, row.seedrItemId);
+        result.push(contents ? await database.update({ ...row, kind: contents.kind, fileCount: contents.entries.length }) : row);
+        continue;
+      }
       const item = await adapter.getItem(row.seedrAccountId, row.seedrItemId);
       if (item.sizeBytes > maxFileBytes(env)) {
         // Provider resolves size after acceptance. Policy rejects oversized owned
@@ -61,10 +70,11 @@ async function refreshRows(database: Database, adapter: SeedrAdapter, env: Env) 
         result.push(await database.update({ ...row, seedrItemId: item.itemId, sizeBytes: item.sizeBytes, status: "failed", playable: false,
           errorMessage: "This file exceeds the supported size limit and was removed." }));
       } else result.push(await database.update({ ...row, seedrItemId: item.itemId, displayName: item.displayName, sizeBytes: item.sizeBytes,
-        status: item.status, progress: item.progress, playable: item.playable, errorMessage: item.status === "failed" ? "Download failed or was removed from Seedr." : null }));
+        status: item.status, progress: item.progress, playable: item.playable, kind: item.kind ?? null, fileCount: item.fileCount ?? null,
+        errorMessage: item.status === "failed" ? "Download failed or was removed from Seedr." : null }));
     } catch {
       // A transient outage must not permanently fail the task or lose ownership.
-      result.push(await database.update({ ...row, errorMessage: "Seedr is temporarily unavailable. Progress will retry automatically." }));
+      result.push(reconcile ? row : await database.update({ ...row, errorMessage: "Seedr is temporarily unavailable. Progress will retry automatically." }));
     }
   }
   return result;
@@ -91,6 +101,8 @@ async function verifyTurnstile(token: unknown, env: Env) {
 }
 async function createDownload(request: Request, env: Env) {
   const body = await readJsonBody(request), magnet = validateMagnet(body.magnet), database = databaseFor(env), adapter = adapterFor(env);
+  const ownerSessionHash=await requestOwnerHash(request);
+  if(!ownerSessionHash)throw new ApiProblem(400,"invalid_session","A secure browser session is required. Reload LinkBox and try again.");
   await verifyTurnstile(body.turnstileToken, env);
   const hash = await sha256(magnetIdentity(magnet));
   const lock = await database.acquireLease("submission", Date.now(), 120000);
@@ -118,21 +130,21 @@ async function createDownload(request: Request, env: Env) {
     let row: DownloadRow = { id: crypto.randomUUID(), publicId, seedrAccountId: account.id, seedrItemId: `linkbox:${publicId}:0:0`, magnetHash: hash,
       displayName: "New shared download", sizeBytes: requested ?? 0, status: "queued", progress: 0, createdAt: created.toISOString(),
       cleanupAllowedAt: new Date(+created + 10800000).toISOString(), expiresAt: new Date(+created + 86400000).toISOString(),
-      deletedAt: null, errorMessage: null, cleanupClaimedAt: null, playable: false };
+      deletedAt: null, errorMessage: null, cleanupClaimedAt: null, playable: false, ownerSessionHash };
     row = await database.create(row); // Admission / uniqueness BEFORE Seedr writes.
     try {
       const item = await adapter.addMagnet(account.id, magnet, { publicId, checkpoint: async itemId => {
         row = await database.update({ ...row, seedrItemId: itemId, status: "fetching_metadata" });
       } });
       row = await database.update({ ...row, seedrItemId: item.itemId, displayName: item.displayName, sizeBytes: item.sizeBytes,
-        status: item.status, progress: item.progress, playable: item.playable });
+        status: item.status, progress: item.progress, playable: item.playable, kind: item.kind ?? null, fileCount: item.fileCount ?? null });
     } catch (error) {
       // Persist uncertain acceptance instead of blindly replaying POST. Polling
       // recovers by the exact app folder; Cron can clean abandoned reservations.
       const rejected = error instanceof ApiProblem && error.status === 409;
       row = await database.update({ ...row, status: rejected ? "failed" : "fetching_metadata", errorMessage: rejected ? "Seedr could not accept this download. Check available storage and account restrictions." : "Submission confirmation is delayed. Progress will retry automatically." });
     }
-    return publicDownload(row);
+    return publicDownload(row,true);
   } finally { await database.releaseLease("submission", lock); }
 }
 function storageOnly(env: Env) { return env.SEEDR_MODE === "live" && env.SEEDR_ACCESS === "storage-only"; }
@@ -154,22 +166,39 @@ async function appFetch(request: Request, env: Env): Promise<Response> {
       throw new ApiProblem(409, "storage_only", "File actions are disabled in read-only mode.");
     }
     const database = databaseFor(env), adapter = adapterFor(env);
+    const ownerHash=await requestOwnerHash(request);
+    const safeDownload=(row:DownloadRow)=>publicDownload(row,ownsDownload(row,ownerHash));
     if (path === "/api/storage" && request.method === "GET") return json(await storageSnapshot(database, adapter, env), 200, headers);
-    if (path === "/api/downloads" && request.method === "GET") return json((await refreshRows(database, adapter, env)).map(publicDownload), 200, headers);
+    if (path === "/api/downloads" && request.method === "GET") return json((await refreshRows(database, adapter, env)).map(safeDownload), 200, headers);
     if (path === "/api/downloads" && request.method === "POST") return json(await createDownload(request, env), 201, headers);
-    const match = /^\/api\/downloads\/([0-9a-f-]+)(?:\/(cleanup|play|download|contents))?$/i.exec(path);
+    const match = /^\/api\/downloads\/([0-9a-f-]+)(?:\/(cleanup|delete|play|download|contents))?$/i.exec(path);
     if (!match) throw new ApiProblem(404, "not_found", "This download does not exist.");
     const [, publicId, action] = match, row = await database.findByPublicId(publicId);
     if (!row) throw new ApiProblem(404, "not_found", "This download does not exist.");
-    if (!action && request.method === "GET") return json(publicDownload(row), 200, headers);
+    if (!action && request.method === "GET") return json(safeDownload(row), 200, headers);
+    if(action==="delete"&&request.method!=="POST")throw new ApiProblem(405,"method_not_allowed","Method not allowed.");
+    if(action==="delete"&&request.method==="POST"){
+      if(!ownsDownload(row,ownerHash))throw new ApiProblem(403,"not_download_owner","Only the browser that added this download can delete it immediately.");
+      if(row.deletedAt)return json(safeDownload(row),200,headers);
+      // Prevent deletion racing the admission/checkpoint sequence of a submission.
+      const lock=await database.acquireLease("submission",Date.now(),120000);
+      if(!lock)throw new ApiProblem(409,"submission_busy","A download is still being submitted. Please retry deletion shortly.");
+      try{
+        await rateLimit(database,request,env,`delete:${publicId}`);
+        const updated=await deleteOwnedItem(database,adapter,publicId,new Date().toISOString(),ownerHash);
+        if(!updated)throw new ApiProblem(409,"deletion_in_progress","This download is already being deleted. Please retry shortly.");
+        try{await database.syncAccounts(await adapter.syncAccounts());}catch{console.warn("Storage refresh will retry after deletion");}
+        return json(safeDownload(updated),200,headers);
+      }finally{await database.releaseLease("submission",lock);}
+    }
     if (action === "cleanup" && request.method === "POST") {
-      if (row.deletedAt) return json(publicDownload(row), 200, headers);
+      if (row.deletedAt) return json(safeDownload(row), 200, headers);
       if (row.cleanupAllowedAt > new Date().toISOString()) throw new ApiProblem(409, "cleanup_protected", "This file is protected from cleanup for its first 3 hours.");
       await rateLimit(database, request, env, `cleanup:${publicId}`);
       const updated = await deleteCommunityItem(database, adapter, publicId, new Date().toISOString());
       if (!updated) throw new ApiProblem(409, "cleanup_protected", "This file is protected from cleanup or is already being deleted.");
       await database.syncAccounts(await adapter.syncAccounts());
-      return json(publicDownload(updated), 200, headers);
+      return json(safeDownload(updated), 200, headers);
     }
     if (request.method !== "GET") throw new ApiProblem(405, "method_not_allowed", "Method not allowed.");
     if (row.deletedAt || row.expiresAt <= new Date().toISOString()) throw new ApiProblem(410, "file_unavailable", "This file is no longer available in LinkBox.");

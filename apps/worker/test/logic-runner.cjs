@@ -8,6 +8,7 @@ const { LiveSeedrAdapter } = require("./logic-test-build/apps/worker/src/seedr/l
 const { SeedrTokenClient, parseQuota } = require("./logic-test-build/apps/worker/src/seedr/token-client.js");
 const { parseRoute, routeUrl, screenNames, isFolderView } = require("./logic-test-build/apps/web/src/lib/routes.js");
 const worker = require("./logic-test-build/apps/worker/src/index.js").default;
+const {downloadKind,formatProgress}=require("./logic-test-build/packages/shared/src/file-kind.js");
 
 const gib = 1024 ** 3;
 const accounts = () => [
@@ -24,6 +25,23 @@ const makeRow = (createdAt, publicId = "public") => ({
 const adapter = { deleteItem: async () => undefined };
 const tests = [];
 const test = (name, fn) => tests.push([name, fn]);
+
+test("authoritative type overrides names, including folders ending in media extensions",()=>{
+ assert.equal(downloadKind({displayName:"Demo.2026 [5.1]",kind:"folder"}),"folder");
+ assert.equal(downloadKind({displayName:"Folder.mp4",kind:"folder"}),"folder");
+ assert.equal(downloadKind({displayName:"LICENSE",kind:"other"}),"other");
+ assert.equal(downloadKind({displayName:"Sample.mp4",kind:null}),"video");
+});
+test("progress displays small decimal percentages without claiming premature completion",()=>{
+ for(const [input,expected] of [[1.6,"1.6%"],[6.15,"6.15%"],[100,"100%"],[99.999,"99.99%"],[0,"0%"],[0.001,"<0.01%"],[NaN,"0%"],[-3,"0%"]])assert.equal(formatProgress(input),expected);
+});
+test("full lazy HLS build retains separate audio support with native controls only",()=>{
+ const Hls=require("hls.js");assert.ok(Hls.DefaultConfig.audioStreamController);assert.ok(Hls.DefaultConfig.audioTrackController);
+ const {readFileSync}=require("node:fs"),{join}=require("node:path");
+ const source=readFileSync(join(__dirname,"../../web/src/components/StreamMedia.tsx"),"utf8");
+ assert.ok(source.includes('import("hls.js")'));assert.ok(source.includes('controls: true'));
+ for(const removed of ['hls.js/light','player-controls','Streaming quality','Audio track','Playback speed','Video fit','Add subtitle file','PictureInPicture2'])assert.ok(!source.includes(removed));
+});
 
 test("actual folder contents override dotted torrent-name preview routes", () => {
   assert.equal(isFolderView({screen:"preview",id:"public"},"folder"),true);
@@ -177,7 +195,7 @@ test("mock fixtures all exist in storage, deletion frees capacity, third account
 });
 
 const env = { SEEDR_MODE: "mock", ALLOWED_ORIGIN: "http://localhost:5173", SUBMISSION_COOLDOWN_SECONDS: "0" };
-const fetchApi = (path, init = {}) => worker.fetch(new Request(`http://localhost:8787${path}`, { ...init, headers: { origin: env.ALLOWED_ORIGIN, "content-type": "application/json", "x-session-id": "test-session", ...init.headers } }), env);
+const fetchApi = (path, init = {}) => worker.fetch(new Request(`http://localhost:8787${path}`, { ...init, headers: { origin: env.ALLOWED_ORIGIN, "content-type": "application/json", "x-session-id": "12345678-1234-4234-8234-123456789012", ...init.headers } }), env);
 const fixtureId = index => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
 
 const storageOnlyEnv = {
@@ -207,7 +225,7 @@ test("storage-only list is empty and every file mutation is blocked without exte
   try {
     globalThis.fetch = () => assert.fail("no Seedr file or database access allowed");
     assert.deepEqual(await (await fetchStorageOnly("/api/downloads")).json(), []);
-    for (const path of ["/api/downloads", `/api/downloads/${fixtureId(2)}/cleanup`]) {
+    for (const path of ["/api/downloads", `/api/downloads/${fixtureId(2)}/cleanup`, `/api/downloads/${fixtureId(2)}/delete`]) {
       const response = await fetchStorageOnly(path, { method: "POST" });
       assert.equal(response.status, 409); assert.equal((await response.json()).code, "storage_only");
     }
@@ -270,6 +288,33 @@ test("oversized and malformed JSON submissions get safe client errors", async ()
 });
 test("unapproved browser origins cannot mutate shared storage", async () => {
   assert.equal((await fetchApi(`/api/downloads/${fixtureId(3)}/cleanup`, { method: "POST", headers: { origin: "https://unapproved.example" } })).status, 403);
+});
+
+test("Worker immediate deletion is owner-only, private, confirmed by POST and idempotent",async()=>{
+ const owner="12345678-1234-4234-8234-123456789012",other="87654321-4321-4321-8321-210987654321";
+ const magnet=`magnet:?xt=urn:btih:${"c".repeat(40)}&dn=Wrong%20link%20test.zip&xl=1024`;
+ const created=await fetchApi("/api/downloads",{method:"POST",body:JSON.stringify({magnet})});assert.equal(created.status,201);
+ const file=await created.json();assert.equal(file.canDelete,true);
+ const raw=JSON.stringify(file);assert.ok(!raw.includes(owner));assert.ok(!raw.includes("ownerSessionHash"));
+ const endpoint=`/api/downloads/${file.id}/delete`;
+ assert.equal((await (await fetchApi(`/api/downloads/${file.id}`)).json()).canDelete,true);
+ assert.equal((await (await fetchApi(`/api/downloads/${file.id}`,{headers:{"x-session-id":other}})).json()).canDelete,false);
+ assert.equal((await fetchApi("/api/downloads",{method:"POST",headers:{"x-session-id":other},body:JSON.stringify({magnet})})).status,409);
+ assert.equal((await (await fetchApi(`/api/downloads/${file.id}`)).json()).canDelete,true);
+ assert.equal((await fetchApi(endpoint,{method:"POST",headers:{"x-session-id":other}})).status,403);
+ assert.equal((await fetchApi(endpoint,{method:"POST",headers:{"x-session-id":""}})).status,403);
+ assert.equal((await fetchApi(endpoint,{method:"GET"})).status,405);
+ assert.equal((await fetchApi(endpoint,{method:"POST",headers:{origin:"https://unapproved.example"}})).status,403);
+ assert.equal((await fetchApi(`/api/downloads/${file.id}/cleanup`,{method:"POST"})).status,409);
+ const deleted=await fetchApi(endpoint,{method:"POST"});assert.equal(deleted.status,200);assert.equal((await deleted.json()).status,"deleted");
+ assert.equal((await fetchApi(endpoint,{method:"POST"})).status,200);
+ assert.equal((await fetchApi(endpoint,{method:"POST",headers:{"x-session-id":other}})).status,403);
+ assert.equal((await fetchApi(`/api/downloads/${fixtureId(3)}/delete`,{method:"POST"})).status,403);
+});
+test("owner capability requires a private random UUID rather than an easily guessed session",async()=>{
+ const {requestOwnerHash}=require("./logic-test-build/apps/worker/src/utils/owner.js");
+ assert.equal(await requestOwnerHash(new Request("http://localhost",{headers:{"x-session-id":"test-session"}})),null);
+ const value=await requestOwnerHash(new Request("http://localhost",{headers:{"x-session-id":"12345678-1234-4234-8234-123456789012"}}));assert.match(value,/^[0-9a-f]{64}$/);
 });
 
 (async () => { for (const [name, fn] of tests) { await fn(); console.log(`✓ ${name}`); } console.log(`${tests.length} logic tests passed`); })().catch((error) => { console.error(error); process.exitCode = 1; });

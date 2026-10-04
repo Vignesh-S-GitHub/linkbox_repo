@@ -4,7 +4,8 @@ const { join } = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
 const { D1MetadataDatabase } = require("./logic-test-build/apps/worker/src/database/d1-database.js");
 const { databaseFor } = require("./logic-test-build/apps/worker/src/database/factory.js");
-const { deleteCommunityItem, expireDueItems } = require("./logic-test-build/apps/worker/src/cleanup/cleanup-service.js");
+const worker = require("./logic-test-build/apps/worker/src/index.js").default;
+const { deleteCommunityItem, deleteOwnedItem, expireDueItems } = require("./logic-test-build/apps/worker/src/cleanup/cleanup-service.js");
 
 // Real SQLite executes the SAME migration/statements behind a small D1 binding
 // facade. No remote account, secrets, media or helper subprocesses are involved.
@@ -20,13 +21,15 @@ function fixture(hours, extra = {}) {
     sizeBytes: 1000, status: "ready", progress: 100, createdAt: created.toISOString(),
     cleanupAllowedAt: new Date(+created + 3 * 3600000).toISOString(),
     expiresAt: new Date(+created + 24 * 3600000).toISOString(),
-    deletedAt: null, errorMessage: null, cleanupClaimedAt: null, playable: false, ...extra };
+    deletedAt: null, errorMessage: null, cleanupClaimedAt: null, playable: false, kind: null, fileCount: null, ownerSessionHash:null, ...extra };
 }
 function setup() {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec("PRAGMA foreign_keys=ON");
   sqlite.exec(readFileSync(join(__dirname, "../migrations/0001_metadata.sql"), "utf8"));
   sqlite.exec(readFileSync(join(__dirname, "../migrations/0002_live_guards.sql"), "utf8"));
+  sqlite.exec(readFileSync(join(__dirname, "../migrations/0003_content_type.sql"), "utf8"));
+  sqlite.exec(readFileSync(join(__dirname, "../migrations/0004_download_owner.sql"), "utf8"));
   const binding = {
     prepare(sql) {
       let values = [];
@@ -46,6 +49,67 @@ function setup() {
 }
 const tests = [];
 const test = (name, run) => tests.push([name, run]);
+
+test("owner-only D1 deletion bypasses protection atomically, not for strangers or legacy items",async()=>{
+ const {sqlite,db}=setup();try{await db.syncAccounts([account]);const owner="a".repeat(64),other="b".repeat(64);
+ const row=await db.create(fixture(1,{ownerSessionHash:owner,status:"downloading"}));
+ assert.equal(await db.claimForCleanup(row.publicId,now),null);assert.equal(await db.claimForCleanup(row.publicId,now,other),null);
+ let calls=0;const adapter={async deleteItem(){calls++;}};
+ await assert.rejects(deleteOwnedItem(db,adapter,row.publicId,now,other),e=>e.code==="not_download_owner");assert.equal(calls,0);
+ const outcomes=await Promise.all([deleteOwnedItem(db,adapter,row.publicId,now,owner),deleteOwnedItem(db,adapter,row.publicId,now,owner)]);
+ assert.equal(calls,1);assert.ok(outcomes.filter(Boolean).length>=1);assert.ok(outcomes.filter(Boolean).every(row=>row.status==="deleted"));assert.equal((await db.findByPublicId(row.publicId)).status,"deleted");
+ assert.equal((await deleteOwnedItem(db,adapter,row.publicId,now,owner)).status,"deleted");assert.equal(calls,1);
+ await assert.rejects(deleteOwnedItem(db,adapter,row.publicId,now,other),e=>e.code==="not_download_owner");
+ const old=await db.create(fixture(1));assert.equal(await db.claimForCleanup(old.publicId,now,owner),null);
+ await assert.rejects(deleteOwnedItem(db,adapter,old.publicId,now,owner),e=>e.code==="not_download_owner");
+ }finally{sqlite.close();}
+});
+test("D1 owner digest is immutable and deletion failure keeps a retryable original status",async()=>{
+ const {sqlite,db}=setup();try{await db.syncAccounts([account]);const owner="a".repeat(64);
+ const row=await db.create(fixture(1,{ownerSessionHash:owner,status:"downloading"}));
+ assert.equal((await db.update({...row,ownerSessionHash:"b".repeat(64)})).ownerSessionHash,owner);
+ await assert.rejects(deleteOwnedItem(db,{async deleteItem(){throw Error("outage");}},row.publicId,now,owner));
+ const retry=await db.findByPublicId(row.publicId);assert.equal(retry.deletedAt,null);assert.equal(retry.cleanupClaimedAt,null);assert.equal(retry.status,"downloading");
+ assert.equal((await deleteOwnedItem(db,{async deleteItem(){}},row.publicId,now,owner)).status,"deleted");
+ await assert.rejects(db.create(fixture(1,{ownerSessionHash:"invalid"})),e=>e.code==="database_unavailable");
+ }finally{sqlite.close();}
+});
+test("Worker owner deletion waits for submission checkpoint lock without contacting Seedr",async()=>{
+ const {sqlite,db,binding}=setup(),original=globalThis.fetch;
+ try{await db.syncAccounts([account]);const session="12345678-1234-4234-8234-123456789012";
+ const {requestOwnerHash}=require("./logic-test-build/apps/worker/src/utils/owner.js");const hash=await requestOwnerHash(new Request("http://localhost",{headers:{"x-session-id":session}}));
+ const row=await db.create(fixture(1,{ownerSessionHash:hash}));const lock=await db.acquireLease("submission",Date.now(),120000);
+ globalThis.fetch=()=>assert.fail("no Seedr calls while admission is locked");
+ const env={DB:binding,SEEDR_MODE:"live",SEEDR_ACCESS:"full",SEEDR_ACCOUNT_CONFIG:JSON.stringify([{id:account.id,label:"Test",capacityBytes:5000,secretKeyReference:"SEEDR_ACCOUNT_A_TOKEN"}])};
+ const response=await worker.fetch(new Request(`http://localhost/api/downloads/${row.publicId}/delete`,{method:"POST",headers:{"x-session-id":session}}),env);
+ assert.equal(response.status,409);assert.equal((await response.json()).code,"submission_busy");assert.equal((await db.findByPublicId(row.publicId)).deletedAt,null);
+ await db.releaseLease("submission",lock);
+ }finally{globalThis.fetch=original;sqlite.close();}
+});
+
+test("D1 preserves fractional progress and authoritative dotted-folder metadata", async () => {
+ const {sqlite,db}=setup();
+ try {await db.syncAccounts([account]); const row=await db.create(fixture(1,{status:"downloading",progress:1.6,displayName:"Sample.2026 [5.1]",kind:"folder",fileCount:4}));
+ assert.equal(row.progress,1.6);assert.equal(row.kind,"folder");assert.equal(row.fileCount,4);
+ assert.equal((await db.update({...row,progress:6.15})).progress,6.15);
+ await assert.rejects(db.update({...row,kind:"not-a-kind"}),e=>e.code==="database_unavailable");
+ await assert.rejects(db.update({...row,fileCount:1001}),e=>e.code==="database_unavailable");
+ }finally{sqlite.close();}
+});
+
+test("existing ready items backfill owned folder type once without task writes or lifetime resets",async()=>{
+ const {sqlite,db,binding}=setup(),original=globalThis.fetch; let reads=0;
+ const publicId="12345678-1234-4234-8234-123456789012";
+ try {await db.syncAccounts([account]); const timestamp=Date.now();const stored=await db.create(fixture(1,{publicId,seedrItemId:`linkbox:${publicId}:10:20`,displayName:"Demo.2026 [5.1]",createdAt:new Date(timestamp-3600000).toISOString(),cleanupAllowedAt:new Date(timestamp+2*3600000).toISOString(),expiresAt:new Date(timestamp+23*3600000).toISOString()}));
+ globalThis.fetch=async(url,options)=>{reads++;assert.equal(options.method,"GET");assert.ok(url.endsWith("/fs/folder/10/contents"));return Response.json({id:10,path:`LinkBox-${publicId}`,parent:0,folders:[],files:[
+ {id:30,name:"Sample.mp4",folder_id:10,size:99,is_video:true},{id:31,name:"English.srt",folder_id:10,size:1}]});};
+ const env={DB:binding,SEEDR_MODE:"live",SEEDR_ACCESS:"full",SEEDR_ACCOUNT_A_TOKEN:"fixture-secret",SEEDR_ACCOUNT_CONFIG:JSON.stringify([{id:account.id,label:"Test",enabled:true,capacityBytes:5000,secretKeyReference:"SEEDR_ACCOUNT_A_TOKEN"}])};
+ const response=await worker.fetch(new Request("http://localhost/api/downloads"),env);assert.equal(response.status,200);
+ const [value]=await response.json();assert.equal(value.kind,"folder");assert.equal(value.fileCount,2);assert.equal(value.createdAt,stored.createdAt);assert.equal(value.expiresAt,stored.expiresAt);
+ assert.equal(reads,1);assert.equal(JSON.stringify(value).includes("fixture-secret"),false);assert.equal(value.seedrItemId,undefined);
+ await worker.fetch(new Request("http://localhost/api/downloads"),env);assert.equal(reads,1);
+ }finally{globalThis.fetch=original;sqlite.close();}
+});
 
 test("D1 submission lease and session/IP cooldown are shared across isolates", async () => {
  const {sqlite,db,binding}=setup(); const other=new D1MetadataDatabase(binding);

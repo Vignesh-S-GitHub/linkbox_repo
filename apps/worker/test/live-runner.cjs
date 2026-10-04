@@ -5,6 +5,30 @@ const id = "12345678-1234-4234-8234-123456789012";
 const item = `linkbox:${id}:10:20`;
 const tests = [];
 const test = (name,fn)=>tests.push([name,fn]);
+
+test("provider decimal progress is not rounded down and invalid progress fails safely", async()=>{
+ const {adapter,fetcher}=fixture(),original=globalThis.fetch;
+ try {for(const progress of [1.6,6.15,99.999]){
+ globalThis.fetch=async(url,options)=>url.endsWith("/tasks/20")?Response.json({task:{id:20,folder_id:10,name:"New shared download",size:100,state:"downloading",progress,error:null}}):fetcher(url,options);
+ const result=await adapter.getItem("a",item);assert.equal(result.progress,progress);assert.equal(result.status,"downloading");assert.equal(result.kind,null);
+ }
+ globalThis.fetch=async(url,options)=>url.endsWith("/tasks/20")?Response.json({task:{id:20,folder_id:10,size:100,progress:"wrong"}}):fetcher(url,options);
+ await assert.rejects(adapter.getItem("a",item),e=>e.code==="seedr_invalid_response");
+ }finally{globalThis.fetch=original;}
+});
+test("multi-file torrent is a folder regardless of dots in its title",async()=>{
+ const {adapter,fetcher}=fixture(),original=globalThis.fetch;
+ try {globalThis.fetch=async(url,options)=>{
+ if(url.endsWith("/tasks/20"))return Response.json({task:{id:20,folder_id:10,name:"Demo.2026 [5.1]",size:100,state:"finished",progress:100,error:null}});
+ if(url.endsWith("/fs/folder/11/contents"))return Response.json({id:11,path:`LinkBox-${id}/Sample`,parent:10,size:100,folders:[],files:[
+ {id:30,name:"Sample.mp4",size:97,folder_id:11,is_video:true},
+ {id:31,name:"Poster.jpg",size:1,folder_id:11}, {id:32,name:"Notes.txt",size:1,folder_id:11}, {id:33,name:"English.srt",size:1,folder_id:11}]});
+ return fetcher(url,options);
+ };
+ const value=await adapter.getItem("a",item);assert.equal(value.kind,"folder");assert.equal(value.fileCount,4);assert.equal(value.playable,false);
+ const contents=await adapter.contents("a",item);assert.deepEqual(contents.entries.map(e=>e.kind),["video","image","text","subtitle"]);
+ }finally{globalThis.fetch=original;}
+});
 function fixture() {
   const calls=[]; let deleted=false,taskDeleted=false;
   const fetcher=async (url,options)=>{
