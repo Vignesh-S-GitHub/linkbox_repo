@@ -16,7 +16,7 @@ import { useDownloads } from "./hooks/useDownloads";
 import { useNavigation } from "./hooks/useNavigation";
 import { api } from "./lib/api";
 import { formatBytes } from "./lib/format";
-import { routeUrl, type Screen } from "./lib/routes";
+import { routeUrl, isFolderView, type Screen } from "./lib/routes";
 
 type Selection = { file: PublicDownload; entry?: FileEntry };
 const pageTitles: Partial<Record<Screen, string>> = { progress: "Add Link", storage: "Storage", settings: "Settings", about: "About LinkBox" };
@@ -78,7 +78,12 @@ function App() {
       const result = await api.delivery(file.id, "download", child?.id);
       if (target) target.location.href = result.url;
       else { const link = document.createElement("a"); link.href = result.url; link.rel = "noopener"; link.click(); }
-    } catch (cause) { target?.close(); setNotice((cause as ApiError).error ?? "Download unavailable. Please try again."); }
+    } catch (cause) {
+      target?.close();
+      const problem = cause as ApiError;
+      if (!child && problem.code === "unsupported") navigate("folder", file.id);
+      else setNotice(problem.error ?? "Download unavailable. Please try again.");
+    }
   };
   const shareUrl = (file: PublicDownload, child?: FileEntry) => {
     const kind = child?.kind ?? fileKind(file.displayName);
@@ -131,9 +136,9 @@ function App() {
   else if (missing || route.screen === "unavailable") page = <UnavailablePage onFiles={() => navigate("files")}/>;
   else if (current && route.screen === "progress") page = <ProgressPage file={current} onClose={() => navigate("files")}/>;
   else if (current && current.status !== "ready" && fileScreen) page = <ProgressPage file={current} onClose={() => navigate("files")}/>;
-  else if (contentsLoading) page = <FileLoading/>;
+  else if (contentsLoading || (needsContents && !contents && !contentsError)) page = <FileLoading/>;
   else if (contentsError) page = <UnavailablePage onFiles={() => navigate("files")} message={contentsError}/>;
-  else if (current && route.screen === "folder" && contents) page = <FolderPage file={current} contents={contents} onOpen={child => open(current, child)} onMore={child => setActions({ file: current, entry: child })} onDownload={child => void download(current, child)}/>;
+  else if (current && contents && isFolderView(route, contents.kind)) page = <FolderPage file={current} contents={contents} onOpen={child => open(current, child)} onMore={child => setActions({ file: current, entry: child })} onDownload={child => void download(current, child)}/>;
   else if (current && route.screen === "preview" && (entry?.preview === "guide" || (!route.entry && contents?.preview === "guide"))) page = <PreviewPage key={route.id + (route.entry ?? "")} file={current} entry={entry} onDownload={() => void download(current, entry)} onShare={() => void share(current, entry)} onOpenExternal={() => void download(current, entry, true)}/>;
   else if (current && route.screen === "preview" && ["image","pdf"].includes(entry?.kind??fileKind(current.displayName))) page=<LivePreviewPage key={route.id+(route.entry??"")} file={current} entry={entry} onDownload={()=>void download(current,entry)}/>;
   else if (current && route.screen === "player" && (entry?.playable ?? current.playable)) page = <PlayerPage key={route.id + (route.entry ?? "")} file={current} entry={entry} onDownload={() => void download(current, entry)}/>;

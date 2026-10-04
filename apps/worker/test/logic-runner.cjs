@@ -6,7 +6,7 @@ const { deleteCommunityItem, expireDueItems } = require("./logic-test-build/apps
 const { MockSeedrAdapter } = require("./logic-test-build/apps/worker/src/seedr/mock-adapter.js");
 const { LiveSeedrAdapter } = require("./logic-test-build/apps/worker/src/seedr/live-adapter.js");
 const { SeedrTokenClient, parseQuota } = require("./logic-test-build/apps/worker/src/seedr/token-client.js");
-const { parseRoute, routeUrl, screenNames } = require("./logic-test-build/apps/web/src/lib/routes.js");
+const { parseRoute, routeUrl, screenNames, isFolderView } = require("./logic-test-build/apps/web/src/lib/routes.js");
 const worker = require("./logic-test-build/apps/worker/src/index.js").default;
 
 const gib = 1024 ** 3;
@@ -25,6 +25,13 @@ const adapter = { deleteItem: async () => undefined };
 const tests = [];
 const test = (name, fn) => tests.push([name, fn]);
 
+test("actual folder contents override dotted torrent-name preview routes", () => {
+  assert.equal(isFolderView({screen:"preview",id:"public"},"folder"),true);
+  assert.equal(isFolderView({screen:"preview",id:"public",entry:"file"},"folder"),false);
+  assert.equal(isFolderView({screen:"preview",id:"public"},"pdf"),false);
+  assert.equal(isFolderView({screen:"folder",id:"public"},"folder"),true);
+  assert.equal(isFolderView({screen:"player",id:"public"},"folder"),false);
+});
 test("verified quota fields yield real counts, never guessed aliases", () => {
   assert.deepEqual(parseQuota({ space_used: gib, space_max: 5 * gib }), { capacityBytes: 5 * gib, usedBytes: gib, availableBytes: 4 * gib });
   for (const quota of [{}, { used_space: 1, space: 5 }, { space_used: "1", space_max: 5 }, { space_used: -1, space_max: 5 }, { space_used: 6, space_max: 5 }, { space_used: 1, space_max: 0 }, { space_used: NaN, space_max: 5 }, { space_used: 1.5, space_max: 5 }, { space_used: 1, space_max: Infinity }, { space_used: 0, space_max: Number.MAX_SAFE_INTEGER + 1 }]) {

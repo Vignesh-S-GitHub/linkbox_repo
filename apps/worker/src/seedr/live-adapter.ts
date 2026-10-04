@@ -128,7 +128,10 @@ export class LiveSeedrAdapter implements SeedrAdapter {
       const folder = pending.shift()!;
       for (const value of array(folder.files)) {
         if (numeric(value.folder_id) !== numeric(folder.id)) throw ownership();
-        const remoteId = numeric(value.id), displayName = name(value.name), kind = fileKind(displayName);
+        const remoteId = numeric(value.id), displayName = name(value.name), inferred = fileKind(displayName);
+        // The provider lists actual files here. An extensionless filename is
+        // not a folder, regardless of the fixture name heuristic.
+        const kind = inferred === "folder" ? "other" : inferred;
         result.push({ remoteId, entry: { id: (await sha256(`${id.publicId}:${remoteId}`)).slice(0, 40), displayName, sizeBytes: numeric(value.size), kind,
           playable: value.is_video === true || value.is_audio === true, preview: null } });
         if (result.length > 1000) throw invalid();
@@ -156,7 +159,16 @@ export class LiveSeedrAdapter implements SeedrAdapter {
     const { client, files } = await this.resolve(accountId, itemId);
     const file = entryId ? files.find(value => value.entry.id === entryId) : files.length === 1 ? files[0] : undefined;
     if (!file) return null; // Individual delivery; archive-init body is undocumented.
-    return directUrl(object(await client.request(`/download/file/${file.remoteId}/url`)).url);
+    const url = directUrl(object(await client.request(`/download/file/${file.remoteId}/url`)).url);
+    // Seedr can list sidecar files and issue URLs whose CDN response is 404.
+    // HEAD was verified on real delivery URLs: metadata only, no media proxy,
+    // no account authorization header, no redirects and no signed URL logging.
+    let response: Response;
+    try { response = await fetch(url, { method: "HEAD", redirect: "manual", signal: AbortSignal.timeout(10000) }); }
+    catch { throw new ApiProblem(503, "seedr_delivery_unavailable", "Seedr file delivery is temporarily unavailable. Please try again later."); }
+    await response.body?.cancel();
+    if (!response.ok) throw new ApiProblem(503, "seedr_delivery_unavailable", "Seedr listed this file, but its download is currently unavailable. Please try again later.");
+    return url;
   }
   async playbackUrl(accountId: string, itemId: string, entryId?: string): Promise<string | null> {
     const { client, files } = await this.resolve(accountId, itemId);
