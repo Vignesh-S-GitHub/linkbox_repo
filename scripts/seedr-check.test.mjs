@@ -84,7 +84,7 @@ test("single-account setup derives capacity from Seedr and preserves unrelated c
   const source = '# private\nSEEDR_MODE=mock\nSEEDR_MODE=mock\nSEEDR_ACCESS=full\nSEEDR_ACCOUNT_CONFIG=old-demo\nALLOWED_ORIGIN=http://localhost:5173\nTURNSTILE_SECRET_KEY=dummy-preserved\n';
   const vars = renderWorkerVars(source, "dummy-pat", { space_used: 123, space_max: 2147483648 });
   assert.equal(vars.match(/^SEEDR_MODE=/gm).length, 1);
-  assert.ok(vars.includes("SEEDR_MODE=live\nSEEDR_ACCESS=storage-only"));
+  assert.ok(vars.includes("SEEDR_MODE=live\nSEEDR_ACCESS=full"));
   assert.ok(vars.includes("ALLOWED_ORIGIN=http://localhost:5173"));
   assert.ok(vars.includes("TURNSTILE_SECRET_KEY=dummy-preserved"));
   assert.ok(vars.includes("SEEDR_ACCOUNT_A_TOKEN=dummy-pat"));

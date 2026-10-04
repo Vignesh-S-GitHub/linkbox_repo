@@ -24,6 +24,27 @@ const mapRow = (row: StoredRow): DownloadRow => ({
 export class D1MetadataDatabase implements Database {
   constructor(private readonly db: D1Database) {}
 
+  async acquireLease(name: string, now: number, ttl: number): Promise<string | null> {
+    const holder = crypto.randomUUID();
+    const result = await this.query(() => this.db.prepare(`INSERT INTO request_guards(name,holder,expires_ms)
+      VALUES (?1,?2,?3) ON CONFLICT(name) DO UPDATE SET holder=excluded.holder,expires_ms=excluded.expires_ms
+      WHERE request_guards.expires_ms<=?4 RETURNING holder`).bind(name,holder,now+ttl,now).first<{holder:string}>());
+    return result?.holder ?? null;
+  }
+  async releaseLease(name: string, holder: string): Promise<void> {
+    await this.query(() => this.db.prepare("DELETE FROM request_guards WHERE name=?1 AND holder=?2").bind(name,holder).run());
+  }
+  async pruneGuards(now: number): Promise<void> {
+    await this.query(() => this.db.prepare("DELETE FROM request_guards WHERE expires_ms<=?1").bind(now).run());
+  }
+  async cachedAccounts(): Promise<AccountState[]> {
+    const result = await this.query(() => this.db.prepare("SELECT * FROM seedr_accounts WHERE enabled=1").all<{
+      id:string;label:string;enabled:number;capacity_bytes:number;used_bytes:number;available_bytes:number;secret_key_reference:string;last_synced_at:string
+    }>());
+    return result.results.map(row=>({id:row.id,label:row.label,enabled:!!row.enabled,capacityBytes:row.capacity_bytes,usedBytes:row.used_bytes,
+      availableBytes:row.available_bytes,secretKeyReference:row.secret_key_reference,lastSyncedAt:row.last_synced_at}));
+  }
+
   private async query<T>(operation: () => Promise<T>): Promise<T> {
     try { return await operation(); }
     catch (error) {
@@ -98,12 +119,12 @@ export class D1MetadataDatabase implements Database {
     // cleanup claim or resurrect a deleted row. Only the holder of the claim updates it.
     const result = await this.query(() => this.db.prepare(`UPDATE downloads
       SET display_name=?1, size_bytes=?2, status=?3, progress=?4, deleted_at=?5,
-          error_message=?6, cleanup_claimed_at=?7, playable=?8, updated_at=?9
+          error_message=?6, cleanup_claimed_at=?7, playable=?8, updated_at=?9, seedr_item_id=?12
       WHERE id=?10 AND deleted_at IS NULL
         AND cleanup_claimed_at IS ?11
       RETURNING ${columns}`).bind(row.displayName, row.sizeBytes, row.status, row.progress,
       row.deletedAt, row.errorMessage, row.cleanupClaimedAt, Number(row.playable), new Date().toISOString(),
-      row.id, expectedCleanupClaim).first<StoredRow>());
+      row.id, expectedCleanupClaim, row.seedrItemId).first<StoredRow>());
     if (result) return mapRow(result);
     const current = await this.findByPublicId(row.publicId);
     if (current) return current;
@@ -114,16 +135,16 @@ export class D1MetadataDatabase implements Database {
     // One conditional statement, not SELECT then UPDATE: atomic across all Workers.
     const row = await this.query(() => this.db.prepare(`UPDATE downloads
       SET status='deleting', cleanup_claimed_at=?1, updated_at=?1
-      WHERE public_id=?2 AND deleted_at IS NULL AND cleanup_claimed_at IS NULL
-        AND status!='deleting' AND cleanup_allowed_at<=?1
-      RETURNING ${columns}`).bind(now, publicId).first<StoredRow>());
+      WHERE public_id=?2 AND deleted_at IS NULL
+        AND (cleanup_claimed_at IS NULL OR cleanup_claimed_at<=?3) AND cleanup_allowed_at<=?1
+      RETURNING ${columns}`).bind(now, publicId, new Date(Date.parse(now)-300000).toISOString()).first<StoredRow>());
     return row ? mapRow(row) : null;
   }
 
   async listExpired(now: string): Promise<DownloadRow[]> {
     const result = await this.query(() => this.db.prepare(`SELECT ${columns} FROM downloads
-      WHERE deleted_at IS NULL AND expires_at<=?1 AND cleanup_claimed_at IS NULL
-      ORDER BY expires_at LIMIT 50`).bind(now).all<StoredRow>());
+      WHERE deleted_at IS NULL AND expires_at<=?1 AND (cleanup_claimed_at IS NULL OR cleanup_claimed_at<=?2)
+      ORDER BY expires_at LIMIT 8`).bind(now,new Date(Date.parse(now)-300000).toISOString()).all<StoredRow>());
     return result.results.map(mapRow);
   }
 }

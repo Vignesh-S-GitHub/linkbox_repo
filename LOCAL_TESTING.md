@@ -11,7 +11,7 @@ npm run dev
 
 Open `http://localhost:5173`. The Worker listens on `http://localhost:8787`. Keep the terminal open; press Ctrl+C to stop. Alternatively run `npm run dev:worker` and `npm run dev:web` in separate terminals. Both ports are fixed: if occupied, stop the existing service instead of silently starting the frontend on another origin.
 
-The ignored `.dev.vars` currently connects your real account in live storage-only mode; do not overwrite its private token. For the synthetic checklist below, deliberately set `SEEDR_MODE=mock` and restart. No external database, Cloudflare login, Seedr credentials or GitHub upload is necessary for mock testing. `npm run dev` uses Wrangler's local runtime, not a deployed Worker. The local D1 migration initializes persistent metadata for future full live operation; mock data remains isolated in memory.
+The ignored `.dev.vars` connects your real account in full V1 mode; do not overwrite its private token. For the synthetic checklist below, deliberately set `SEEDR_MODE=mock` and restart. Mock data remains isolated in memory; live metadata persists in local D1. Both modes keep media off application infrastructure.
 
 ## Smoke check
 
@@ -20,7 +20,18 @@ Invoke-RestMethod http://localhost:8787/api/storage
 Invoke-RestMethod http://localhost:8787/api/downloads
 ```
 
-In mock mode, storage is 9.5 GB total and 6.2 GB used and five mock files appear. In live storage-only mode, storage reflects the actual connected quota and the file list is empty. Responses must not contain credentials, internal storage account IDs or remote Seedr item IDs.
+Mock storage is 9.5 GB total with generic fixtures. Full live storage uses actual quota and lists only LinkBox-created downloads. Existing personal Seedr files never appear. Responses must not expose credentials or internal remote/account IDs.
+
+## Real V1 workflow
+
+1. Paste an authorized magnet on Home. Follow metadata/progress until Ready; refresh is bounded to 15 seconds while visible.
+2. Open its folder, search entries, play a supported video/audio file, and download an individual file directly from Seedr. On supported browsers, image/PDF previews are native.
+3. Open File details: first 3h are protected, then cleanup eligible, expiry is 24h. A new item's cleanup request must return 409.
+4. Submit the same magnet again: it must return 409 duplicate. Storage is refreshed from Seedr, never invented from fixture data.
+5. After 3h, use the storage-full flow to clear eligible content. Protected files have no selection control. Refresh after deletion and verify saved app links are unavailable.
+6. Cron removes app-owned expired files after 24h. Local handler: `Invoke-WebRequest http://localhost:8787/cdn-cgi/local/scheduled`. Do not accelerate production expiry or expose admin/testing endpoints.
+
+The integration smoke test used the Creative Commons Sintel torrent listed by [WebTorrent](https://webtorrent.io/free-torrents). Its small sample is legal test content, not a generic fixture for public UI. Time-accelerated checks change **only disposable local D1 records**, never production records or retention rules.
 
 ## Browser checklist
 
@@ -60,7 +71,7 @@ npm test
 npm run build
 ```
 
-The automated tests simulate time to verify the protection and expiry boundaries without waiting 24 hours. Wrangler's production Cron Trigger is not a running local clock; local expiry tests exercise the cleanup function. Scheduled production deletion still needs an integration check before deployment.
+The automated tests simulate time to verify the protection and expiry boundaries without waiting 24 hours. Wrangler's production Cron Trigger is not a running local clock. The live local scheduled handler was verified against a disposable app-owned Seedr download, including repeated expiration; production timestamps were not altered. Production Cron itself runs on the configured hourly schedule.
 
 The D1 test runner executes the actual SQLite migration and bound SQL through a small binding facade. It covers account upserts, duplicate/lifecycle constraints, protection, expiry, simultaneous cleanup, failed-delete retry, and stale progress updates. It is not a replacement for Wrangler runtime testing. See README for `dev:cron` and remote D1 deployment steps. Never delete local Wrangler state to fix a migration without backing up needed metadata.
 
@@ -71,8 +82,8 @@ The D1 test runner executes the actual SQLite migration and bound SQL through a 
 - npm cache permissions: use `npm ci --cache .npm-cache` in this project.
 - `spawn EPERM`: the process could not launch a helper. Do not disable security tools or bypass the sandbox. Record the error and run these standard commands in a normal user PowerShell terminal if the agent execution environment is the source of the restriction.
 - Mock state disappears on restart: expected for the in-memory adapter and database.
-- Real Seedr testing: do not simply change `SEEDR_MODE` to live. Verify official API access and finish the live adapter/database security work first. Do not paste passwords or tokens into chat or `VITE_` variables.
+- Real Seedr testing: use `npm run seedr:configure` with the required PAT scopes, apply D1 migrations, then restart. Never paste credentials into chat or `VITE_` variables.
 
 ## Deployment later
 
-No source has been pushed and no Cloudflare service has been deployed as part of this local setup. Deployment should follow only after local browser/build checks and the credential-dependent integration are validated.
+GitHub and Cloudflare are connected. Pages builds the frontend from main automatically. Apply remote D1 migrations and deploy the Worker separately after the release checks pass. See README.

@@ -61,11 +61,11 @@ test("live storage uses PAT quota endpoint and skips disabled accounts", async (
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("real capacity mismatch cannot silently preserve fake demo space", async () => {
+test("real capacity replaces configured demo estimates", async () => {
   const originalFetch = globalThis.fetch;
   try {
     globalThis.fetch = async () => Response.json({ space_used: 0, space_max: 2 * gib });
-    await assert.rejects(new LiveSeedrAdapter([{ ...accounts()[0], secretKeyReference: "A" }], { A: "dummy" }).syncAccounts(), error => error.code === "seedr_capacity_mismatch");
+    assert.equal((await new LiveSeedrAdapter([{ ...accounts()[0], secretKeyReference: "A" }], { A: "dummy" }).syncAccounts())[0].capacityBytes, 2*gib);
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -103,17 +103,14 @@ test("live API failures and malformed bodies never expose provider data", async 
   await assert.rejects(new SeedrTokenClient("dummy", async () => { throw new Error("private runtime detail"); }).quota(), error => error.code === "seedr_unavailable" && !error.message.includes("private runtime detail"));
 });
 
-test("unverified live operations fail closed without adding or deleting personal files", async () => {
+test("live operations reject arbitrary IDs and unknown sizes are not guessed", async () => {
   const originalFetch = globalThis.fetch;
   try {
     globalThis.fetch = () => assert.fail("unverified operations must not contact Seedr");
     const live = new LiveSeedrAdapter(accounts(), {});
-    for (const action of ["inspectMagnet", "addMagnet", "getItem", "deleteItem"]) {
-      await assert.rejects(live[action](), error => error.code === "seedr_transfer_not_enabled");
-    }
-    assert.equal(await live.contents(), null);
-    assert.equal(await live.playbackUrl(), null);
-    assert.equal(await live.downloadUrl(), null);
+    assert.deepEqual(await live.inspectMagnet(`magnet:?xt=urn:btih:${"a".repeat(40)}&xl=1`), {sizeBytes:null,displayName:null});
+    await assert.rejects(live.addMagnet("a","invalid"), error=>error.code==="seedr_ownership");
+    for (const action of ["getItem", "deleteItem", "contents", "playbackUrl", "downloadUrl"]) await assert.rejects(live[action]("a","123"),error=>error.code==="seedr_ownership");
   } finally { globalThis.fetch = originalFetch; }
 });
 

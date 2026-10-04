@@ -8,6 +8,7 @@ import { kindLabels } from "../lib/file-labels";
 import { fileKind } from "../../../../packages/shared/src/file-kind";
 import { formatBytes } from "../lib/format";
 import { api } from "../lib/api";
+import { StreamMedia } from "../components/StreamMedia";
 
 export function UnavailablePage({ onFiles, message }: { onFiles: () => void; message?: string }) {
   return <section className="unavailable"><div className="missing-art"><FileTile kind="text"/><span><X size={20}/></span></div><h1>File unavailable</h1><p>{message ?? "This file is no longer available in LinkBox."}</p><button className="primary" onClick={onFiles}>Go to files</button></section>;
@@ -65,8 +66,15 @@ export function PlayerPage({ file, entry, onDownload }: { file: PublicDownload; 
     return () => { active = false; };
   }, [file.id, entry?.id]);
   const name = entry?.displayName ?? file.displayName;
-  return <section className="player-page"><div className="video-stage">{url ? <video key={url} src={url} controls playsInline preload="metadata" onError={() => setError("The media could not be played in this browser.")} aria-label={name}/> : error ? <div className="player-loading">Playback unavailable</div> : <div className="player-loading"><LoaderCircle className="spin"/>Loading playback…</div>}</div>
+  return <section className="player-page"><div className="video-stage">{url ? <StreamMedia url={url} name={name} audio={(entry?.kind ?? fileKind(name)) === "audio"} onError={() => setError("The media could not be played in this browser. You can still download it.")}/> : error ? <div className="player-loading">Playback unavailable</div> : <div className="player-loading"><LoaderCircle className="spin"/>Loading playback…</div>}</div>
     {error && <p className="inline-error" role="alert">{error}</p>}<div className="folder-heading"><FileTile kind={entry?.kind ?? fileKind(name)}/><div><strong>{name}</strong><small>{formatBytes(entry?.sizeBytes ?? file.sizeBytes)} · {kindLabels[entry?.kind ?? fileKind(name)]}</small></div></div><button className="primary full-width" onClick={onDownload}><BrandIcon name="download" size={18}/>Download</button>
   </section>;
 }
 export function FileLoading() { return <div className="file-list" aria-label="Loading files" role="status">{[1, 2, 3, 4].map(id => <div className="skeleton-row" key={id}><span/><div><i/><i/></div></div>)}<span className="sr-only">Loading files</span></div>; }
+
+export function LivePreviewPage({ file, entry, onDownload }: { file: PublicDownload; entry?: FileEntry; onDownload:()=>void }) {
+  const [url,setUrl]=useState(""); const [error,setError]=useState("");
+  useEffect(()=>{let active=true;api.delivery(file.id,"download",entry?.id).then(value=>{if(active)setUrl(value.url);}).catch(()=>{if(active)setError("Preview unavailable. Try downloading this file.");});return()=>{active=false;};},[file.id,entry?.id]);
+  const name=entry?.displayName??file.displayName,kind=entry?.kind??fileKind(name);
+  return <section className="preview-page"><div className="document-stage">{url ? kind==="image" ? <img src={url} alt={name} style={{maxWidth:"100%",maxHeight:"70vh",objectFit:"contain"}} onError={()=>setError("Preview unavailable. Try Download.")}/> : <object data={url} type="application/pdf" aria-label={name} style={{width:"100%",height:"65vh"}}><p>Open Download to view this PDF in your browser.</p></object> : <div className="player-loading">{error||"Loading preview…"}</div>}</div>{error&&<p className="inline-error" role="alert">{error}</p>}<button className="primary full-width" onClick={onDownload}><BrandIcon name="download"/>Download</button></section>;
+}

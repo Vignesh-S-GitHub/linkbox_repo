@@ -8,7 +8,7 @@ export function renderWorkerVars(existing, token, quota) {
   const config = [{ id: "seedr-a", label: "Seedr account", enabled: true, capacityBytes: quota.space_max, secretKeyReference: "SEEDR_ACCOUNT_A_TOKEN" }];
   const updates = {
     SEEDR_MODE: "live",
-    SEEDR_ACCESS: "storage-only",
+    SEEDR_ACCESS: "full",
     SEEDR_ACCOUNT_CONFIG: JSON.stringify(config),
     SEEDR_ACCOUNT_A_TOKEN: token,
   };
@@ -56,10 +56,10 @@ async function main() {
     const result = await checkQuota(token, fetch, true);
     try { await saveWorkerConfig(token, result.storageCounts); }
     catch { throw new Error("Unable to save private Worker configuration. No token was printed; check local file permissions."); }
-    console.log("Configured one real Seedr account in storage-only mode.");
+    console.log("Configured one real Seedr account for LinkBox V1 live operations.");
     console.log("Token saved only in ignored apps/worker/.dev.vars. Do not share that file.");
     console.log("Capacity and usage will come from your actual Seedr quota, not the demo pool.");
-    console.log("No files were listed, added, downloaded or deleted. Cron cleanup is disabled in this mode.");
+    console.log("Setup changed no Seedr files. The running app can add and deliver app-managed files; eligible cleanup and Cron can delete them.");
     console.log("Restart npm run dev, then refresh the website and open Storage.");
   } catch (error) {
     console.error(error instanceof Error ? error.message : "Seedr configuration failed.");
