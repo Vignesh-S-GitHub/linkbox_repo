@@ -8,6 +8,10 @@ const test = (name,fn)=>tests.push([name,fn]);
 function fixture() {
   const calls=[]; let deleted=false,taskDeleted=false;
   const fetcher=async (url,options)=>{
+    if (new URL(url).hostname === "nw34.seedr.cc") {
+      assert.equal(options.method,"HEAD");assert.equal(options.redirect,"manual");assert.equal(options.headers,undefined);
+      return new Response(null,{status:200});
+    }
     const path=new URL(url).pathname.replace("/api/v0.1/p", "");calls.push({path,method:options.method,body:options.body});
     if(path==="/fs/folder" && options.method==="POST")return Response.json({success:true,id:"10",path:`LinkBox-${id}`});
     if(path==="/tasks" && options.method==="POST")return Response.json({success:true,user_torrent_id:20,title:"Sample",torrent_hash:"a".repeat(40)});
@@ -83,6 +87,12 @@ test("extensionless provider files are downloadable files, not folders",async()=
  const {adapter,fetcher}=fixture(),original=globalThis.fetch;
  try {globalThis.fetch=async(url,options)=>url.endsWith("/fs/folder/11/contents")?Response.json({id:11,path:`LinkBox-${id}/Sample`,parent:10,size:100,folders:[],files:[{id:30,name:"LICENSE",size:100,folder_id:11,is_video:false,is_audio:false}]}):fetcher(url,options);
  const contents=await adapter.contents("a",item);assert.equal(contents.kind,"other");assert.equal(contents.entries[0].kind,"other");assert.ok(await adapter.downloadUrl("a",item,contents.entries[0].id));
+ }finally{globalThis.fetch=original;}
+});
+test("unavailable direct files produce safe errors before browser navigation",async()=>{
+ const {adapter,fetcher}=fixture(),original=globalThis.fetch;
+ try {globalThis.fetch=async(url,options)=>new URL(url).hostname==="nw34.seedr.cc"?new Response(null,{status:404}):fetcher(url,options);
+ await assert.rejects(adapter.downloadUrl("a",item),error=>error.code==="seedr_delivery_unavailable"&&!error.message.includes("temporary=fixture"));
  }finally{globalThis.fetch=original;}
 });
 test("per-invocation provider budget stays below the free Worker limit",async()=>{

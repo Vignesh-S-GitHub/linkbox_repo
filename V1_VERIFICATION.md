@@ -6,7 +6,7 @@ Verified on 2026-10-04. The approved brand assets, theme, layout and navigation 
 
 - Lint and TypeScript checks pass.
 - Frontend production build and Worker production dry-run pass.
-- 68 tests pass: 31 business/API/navigation tests, 13 real SQLite/D1 tests, 10 live-adapter contract/safety tests, and 14 private setup tests.
+- 69 tests pass: 31 business/API/navigation tests, 13 real SQLite/D1 tests, 11 live-adapter contract/safety tests, and 14 private setup tests.
 - Production dependency audit reports no known vulnerabilities.
 
 ## Real-account local end-to-end checks
@@ -37,6 +37,7 @@ Production is enabled by deploying the full Worker and this frontend revision af
 
 - Seedr does not document a size-only magnet preflight; unknown-size submissions rely on Seedr's own whole-account capacity enforcement.
 - Whole-folder ZIP initialization has no documented body schema. Open folders and download individual files.
+- The sample video downloads correctly, but Seedr's subtitle/poster direct URLs returned 404. Verified HEAD checks now catch unavailable provider files before issuing a browser delivery link; preview/download shows a safe retry message instead of navigating to a 404 page.
 - Browsing is bounded to 8 folders / 1,000 files and 48 provider calls per invocation.
 - Native image/PDF preview support varies by browser. Seedr playback availability depends on its supported media and account limits.
 - The app is anonymous shared storage, not a private personal-file manager. Only LinkBox-created content is exposed; manually moving personal content into a LinkBox folder makes it part of that temporary shared folder.
