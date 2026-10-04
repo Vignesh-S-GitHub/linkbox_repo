@@ -1,0 +1,50 @@
+{
+  "brand": {
+    "name": "LinkBox",
+    "tagline": "Paste. Fetch. Access."
+  },
+  "colors": {
+    "primary": "#0969F5",
+    "primaryHover": "#0759D5",
+    "primarySoft": "#EAF3FF",
+    "navy": "#071A3A",
+    "text": "#0F1F3D",
+    "muted": "#6B7A99",
+    "background": "#F6F9FE",
+    "surface": "#FFFFFF",
+    "border": "#E3EAF5",
+    "success": "#12B76A",
+    "warning": "#F79009",
+    "danger": "#F04438",
+    "disabled": "#B8C4D8"
+  },
+  "radius": {
+    "sm": "10px",
+    "md": "14px",
+    "lg": "18px",
+    "xl": "24px",
+    "pill": "999px"
+  },
+  "shadow": {
+    "card": "0 8px 30px rgba(27,76,150,.08)",
+    "floating": "0 12px 32px rgba(9,105,245,.24)"
+  },
+  "spacing": {
+    "xs": "4px",
+    "sm": "8px",
+    "md": "12px",
+    "lg": "16px",
+    "xl": "24px",
+    "2xl": "32px"
+  },
+  "typography": {
+    "fontFamily": "Inter, system-ui, -apple-system, Segoe UI, sans-serif",
+    "weights": {
+      "regular": 400,
+      "medium": 500,
+      "semibold": 600,
+      "bold": 700,
+      "extrabold": 800
+    }
+  }
+}

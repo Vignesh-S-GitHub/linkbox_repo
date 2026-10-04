@@ -1,0 +1,129 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+/* Official LinkBox asset kit, pinned to 6c29288378f63a257a2416402155bc8612903f11.
+   Palette, typography, radii and shadows from 05_theme/theme-tokens.json. */
+:root {
+  --lb-primary: #0969f5;
+  --lb-primary-hover: #0759d5;
+  --lb-primary-soft: #eaf3ff;
+  --lb-navy: #071a3a;
+  --lb-text: #0f1f3d;
+  --lb-muted: #6b7a99;
+  --lb-bg: #f6f9fe;
+  --lb-surface: #fff;
+  --lb-border: #e3eaf5;
+  --lb-success: #12b76a;
+  --lb-warning: #f79009;
+  --lb-danger: #f04438;
+  --lb-r-sm: 10px;
+  --lb-r-md: 14px;
+  --lb-r-lg: 18px;
+  --lb-r-xl: 24px;
+  --lb-shadow-card: 0 8px 30px rgba(27,76,150,.08);
+  --lb-shadow-floating: 0 12px 32px rgba(9,105,245,.24);
+  --lb-font: Inter,system-ui,-apple-system,"Segoe UI",sans-serif;
+  color: var(--lb-text);
+  background: var(--lb-bg);
+  font-family: var(--lb-font);
+}
+body { background: var(--lb-bg); }
+.brand { gap: 9px; }
+.brand-symbol { width: 39px; height: 39px; object-fit: contain; }
+.brand-wordmark { width: 98px; height: 28px; object-fit: contain; }
+.brand-full { width: 130px; height: auto; display: block; object-fit: contain; }
+.brand-ui-icon { display: inline-block; flex-shrink: 0; object-fit: contain; vertical-align: middle; }
+.app-header { background: #fff; color: var(--lb-navy); box-shadow: none; border-bottom: 1px solid var(--lb-border); }
+.header-inner { max-width: 1320px; height: 76px; padding: 0 32px; }
+.online { margin-left: auto; color: var(--lb-muted); }
+.online svg { color: var(--lb-success); }
+.header-add { border-radius: var(--lb-r-sm); background: var(--lb-primary); color: white; }
+.header-add img,.primary img,.floating-add img { filter: brightness(0) invert(1); }
+.header-add:hover,.primary:hover { background: var(--lb-primary-hover); }
+.sidebar { position: absolute; top: 76px; bottom: 0; left: max(0px,calc((100vw - 1320px)/2)); width: 210px; padding: 28px 15px; border-right: 1px solid var(--lb-border); min-height: calc(100vh - 76px); background: #f9fbff; }
+.sidebar nav { display: grid; gap: 8px; }
+.sidebar button { display: flex; gap: 13px; align-items: center; background: none; color: #36507a; padding: 13px 17px; text-align: left; border-radius: 10px; }
+.sidebar .active { color: var(--lb-primary); background: var(--lb-primary-soft); }
+.sidebar p { margin: 34px 17px; color: var(--lb-muted); font-size: 11px; }
+.layout { max-width: 980px; margin: 30px max(28px,calc((100vw - 1320px)/2 + 28px)) 40px max(238px,calc((100vw - 1320px)/2 + 238px)); padding: 0; }
+.mobile-brand { display: block; padding: 16px 0 23px; }
+.brand-large { flex-direction: column; }
+.top-grid { display: flex; flex-direction: column; align-items: stretch; gap: 21px; }
+.add-card { max-width: 620px; width: 100%; margin: 0 auto; padding: 0; }
+.add-card form { margin: 0; }
+.input-row { min-height: 62px; border-color: var(--lb-border); border-radius: var(--lb-r-md); box-shadow: var(--lb-shadow-card); }
+.input-row input { color: var(--lb-text); }
+.primary { width: 44px; height: 44px; min-height: 44px; padding: 0; background: var(--lb-primary); border-radius: var(--lb-r-sm); }
+.storage-card { background: var(--lb-surface); border-color: var(--lb-border); border-radius: var(--lb-r-md); box-shadow: var(--lb-shadow-card); }
+.storage-total { color: var(--lb-muted); font-size: 13px; }
+.top-grid>.storage-card { padding: 16px 18px; position: relative; display: flex; align-items: center; gap: 18px; }
+.top-grid>.storage-card .row { display: contents; }
+.top-grid>.storage-card .row>img { width: 29px; height: 29px; }
+.top-grid>.storage-card .row>div { display: flex; gap: 4px; align-items: center; order: 2; }
+.top-grid>.storage-card h2 { font-size: 13px; white-space: nowrap; letter-spacing: 0; }
+.top-grid>.storage-card .storage-total { font-size: 13px; white-space: nowrap; }
+.top-grid>.storage-card .storage-total span { display: none; }
+.top-grid>.storage-card .meter { flex: 1; height: 8px; margin: 0; order: 1; }
+.top-grid>.storage-card .icon-button { order: 3; padding: 0; }
+.top-grid>.storage-card .availability { display: none; }
+.meter span,.progress span { background: linear-gradient(90deg,#16a7ff,var(--lb-primary)); }
+.availability { color: var(--lb-muted); display: flex; flex-direction: column; text-align: center; gap: 4px; background: #eff6ff; padding: 16px; border-radius: var(--lb-r-sm); }
+.availability strong { color: var(--lb-navy); font-size: 18px; }
+.files { margin-top: 23px; }
+.filter-tabs .active { background: var(--lb-primary); }
+.filter-tabs button { background: #eff5ff; }
+.file-list { border: none; background: transparent; box-shadow: none; border-radius: 0; overflow: visible; }
+.file-card { background: white; border: 1px solid var(--lb-border); border-radius: var(--lb-r-md); padding: 16px; margin-bottom: 9px; gap: 14px; }
+.file-card+.file-card { border-top: 1px solid var(--lb-border); }
+.file-subtitle,.expiry,.file-details,.lifetime-note { color: var(--lb-muted); }
+.ready-note { color: var(--lb-success); }
+.archive-type { background: #fff5dd; }
+.archive-type img { filter: sepia(1) saturate(7) hue-rotate(355deg); }
+.document-type { background: var(--lb-primary-soft); }
+.file-action { border-color: var(--lb-border); border-radius: 8px; }
+.storage-page .row>div { flex: 1; }
+.storage-page .storage-total { margin-top: 4px; }
+.storage-page .storage-total:before { content: "of "; }
+.storage-page .storage-total { font-size: 13px; }
+.danger { background: var(--lb-primary); }
+.sheet { border-radius: var(--lb-r-xl); }
+.sheet-icon { background: #ffe4e7; color: var(--lb-danger); }
+.bottom-nav button:not(.active) img { filter: grayscale(1); opacity: .65; }
+.floating-add { background: var(--lb-primary); box-shadow: var(--lb-shadow-floating); }
+.file-menu h2 { font-size: 16px; text-align: left; padding-right: 25px; overflow-wrap: anywhere; }
+.file-menu>.muted { text-align: left; padding-bottom: 15px; }
+.menu-action,.menu-details { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 51px; padding: 14px 0; background: none; border-top: 1px solid var(--lb-border); text-align: left; color: var(--lb-navy); font-size: 13px; }
+.menu-details small { font-size: 11px; color: var(--lb-muted); display: block; margin-top: 5px; }
+.menu-protection { display: flex; align-items: center; gap: 7px; color: var(--lb-muted); font-size: 11px; padding: 10px 0 16px; }
+.danger-action { color: var(--lb-danger); }
+@media(max-width:760px) {
+  body { background: #fbfdff; }
+  .app-header { border: none; }
+  .header-inner { height: 60px; padding: 0 18px; }
+  .brand-symbol { width: 31px; height: 31px; }
+  .brand-wordmark { width: 81px; height: 23px; }
+  .sidebar { display: none; }
+  .layout { max-width: 540px; margin: 0 auto; padding: 0 18px 108px; }
+  .mobile-brand { padding: 23px 0 29px; }
+  .brand-full { width: 123px; }
+  .input-row { min-height: 59px; box-shadow: 0 5px 18px rgba(27,76,150,.04); }
+  .top-grid { gap: 19px; }
+  .top-grid>.storage-card { display: block; padding: 13px 15px; box-shadow: none; }
+  .top-grid>.storage-card .row { display: flex; align-items: center; }
+  .top-grid>.storage-card .row>img { width: 25px; height: 25px; }
+  .top-grid>.storage-card .row>div { margin-left: auto; flex: none; gap: 3px; }
+  .top-grid>.storage-card .icon-button { order: 3; }
+  .top-grid>.storage-card .meter { margin: 8px 0 0 36px; }
+  .top-grid>.storage-card h2,.top-grid>.storage-card .storage-total { font-size: 11px; }
+  .files { margin-top: 22px; }
+  .file-card { padding: 12px 8px; margin: 0; border: none; border-radius: 10px; gap: 11px; }
+  .file-card+.file-card { border-top: 1px solid #f0f4fa; }
+  .file-content h3 { font-size: 12px; }
+  .file-type { width: 38px; height: 42px; }
+  .file-action { width: 29px; }
+  .bottom-nav { height: 67px; border-color: var(--lb-border); background: white; }
+  .bottom-nav .active { color: var(--lb-primary); }
+  .floating-add { bottom: 83px; width: 57px; height: 57px; }
+  .storage-view { padding-top: 18px; }
+  .storage-page .storage-card .row { gap: 15px; }
+  .storage-page .storage-card h2 { font-size: 28px; }
+  .sheet { border-radius: 24px 24px 0 0; }
+}

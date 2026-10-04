@@ -1,0 +1,44 @@
+name = "temporary-seedr-share-api"
+account_id = "86d7f2e8f8427578c3dfe0857a5ad5c5"
+main = "src/index.ts"
+compatibility_date = "2026-09-28"
+workers_dev = true
+
+# Local dev uses local D1 state; --remote / production uses this account's D1.
+[[d1_databases]]
+binding = "DB"
+database_name = "linkbox-metadata"
+database_id = "68c9599b-9446-4220-8d15-422f4d08e4c4"
+migrations_dir = "migrations"
+
+[vars]
+SEEDR_MODE = "mock"
+ALLOWED_ORIGIN = "http://localhost:5173"
+MAX_FILE_SIZE_BYTES = "5368709120"
+MAX_ACTIVE_DOWNLOADS = "8"
+SUBMISSION_COOLDOWN_SECONDS = "30"
+SEEDR_ACCOUNT_CONFIG = '[{"id":"seedr-a","label":"Seedr A","enabled":true,"capacityBytes":5368709120,"secretKeyReference":"SEEDR_ACCOUNT_A_TOKEN"},{"id":"seedr-b","label":"Seedr B","enabled":true,"capacityBytes":4831838208,"secretKeyReference":"SEEDR_ACCOUNT_B_TOKEN"}]'
+
+[triggers]
+crons = ["0 * * * *"]
+
+[env.production]
+name = "temporary-seedr-share-api"
+
+[env.production.vars]
+SEEDR_MODE = "live"
+SEEDR_ACCESS = "storage-only"
+ALLOWED_ORIGIN = "https://linkbox-repo.pages.dev"
+MAX_FILE_SIZE_BYTES = "5368709120"
+MAX_ACTIVE_DOWNLOADS = "8"
+SUBMISSION_COOLDOWN_SECONDS = "30"
+SEEDR_ACCOUNT_CONFIG = '[{"id":"seedr-a","label":"Seedr account","enabled":true,"capacityBytes":5368709120,"secretKeyReference":"SEEDR_ACCOUNT_A_TOKEN"}]'
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "linkbox-metadata"
+database_id = "68c9599b-9446-4220-8d15-422f4d08e4c4"
+migrations_dir = "migrations"
+
+[env.production.triggers]
+crons = ["0 * * * *"]

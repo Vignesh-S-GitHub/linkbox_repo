@@ -1,8 +1,12 @@
 node_modules/
+.npm-cache/
 dist/
-.dev.vars
-.env
-.env.*
-!.env.example
 .wrangler/
-.DS_Store
+.dev.vars
+*.local-config.tmp
+.env
+.env.local
+coverage/
+work/
+apps/worker/test/logic-test-build/*
+!apps/worker/test/logic-test-build/package.json
