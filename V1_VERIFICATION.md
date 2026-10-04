@@ -6,7 +6,7 @@ Verified on 2026-10-04. The approved brand assets, theme, layout and navigation 
 
 - Lint and TypeScript checks pass.
 - Frontend production build and Worker production dry-run pass.
-- 66 tests pass: 30 business/API tests, 13 real SQLite/D1 tests, 9 live-adapter contract/safety tests, and 14 private setup tests.
+- 68 tests pass: 31 business/API/navigation tests, 13 real SQLite/D1 tests, 10 live-adapter contract/safety tests, and 14 private setup tests.
 - Production dependency audit reports no known vulnerabilities.
 
 ## Real-account local end-to-end checks
@@ -26,6 +26,10 @@ The official WebTorrent free-torrent list's Creative Commons Sintel sample was u
 Only disposable **local** metadata timestamps were accelerated. Production lifetime remains exactly 3-hour protection / 24-hour expiry. All local sample media was removed; no personal files were imported or deleted.
 
 ## Release scope
+
+The full Worker was deployed as version `60ac45c7-62d1-473b-aad7-13f4b83e2fe9`; Pages production from the merged V1 revision succeeded. Public smoke tests confirmed real submission, Ready status, 11 entries, HLS playback (HTTP 200, decoded video), direct Range download (HTTP 206), protected cleanup rejection (409), and unapproved-origin rejection (403). The approximately 123 MB Creative Commons production sample keeps its normal protection and expires on 2026-10-05 at 17:56 IST; it was not force-deleted or time-accelerated.
+
+Final navigation regressions cover dotted torrent names, extensionless files, loading skeletons, and folder-download fallback. Mobile checks at 360 / 390 / 430px confirm no horizontal overflow; bottom navigation targets are 63px high. The approved CSS and original brand assets are unchanged.
 
 Production is enabled by deploying the full Worker and this frontend revision after all D1 migrations. GitHub Actions checks the same quality gate, and the existing Pages project deploys main automatically. A production browser/API smoke check is recorded separately in the release handoff; local checks do not prove a production deployment succeeded.
 

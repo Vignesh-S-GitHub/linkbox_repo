@@ -128,7 +128,10 @@ export class LiveSeedrAdapter implements SeedrAdapter {
       const folder = pending.shift()!;
       for (const value of array(folder.files)) {
         if (numeric(value.folder_id) !== numeric(folder.id)) throw ownership();
-        const remoteId = numeric(value.id), displayName = name(value.name), kind = fileKind(displayName);
+        const remoteId = numeric(value.id), displayName = name(value.name), inferred = fileKind(displayName);
+        // The provider lists actual files here. An extensionless filename is
+        // not a folder, regardless of the fixture name heuristic.
+        const kind = inferred === "folder" ? "other" : inferred;
         result.push({ remoteId, entry: { id: (await sha256(`${id.publicId}:${remoteId}`)).slice(0, 40), displayName, sizeBytes: numeric(value.size), kind,
           playable: value.is_video === true || value.is_audio === true, preview: null } });
         if (result.length > 1000) throw invalid();

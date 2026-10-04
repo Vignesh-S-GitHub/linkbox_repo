@@ -79,6 +79,12 @@ test("large folder trees are bounded before extra provider requests",async()=>{
  await assert.rejects(adapter.contents("a",item),error=>error.code==="folder_limit");assert.equal(calls.length,7);
  }finally{globalThis.fetch=original;}
 });
+test("extensionless provider files are downloadable files, not folders",async()=>{
+ const {adapter,fetcher}=fixture(),original=globalThis.fetch;
+ try {globalThis.fetch=async(url,options)=>url.endsWith("/fs/folder/11/contents")?Response.json({id:11,path:`LinkBox-${id}/Sample`,parent:10,size:100,folders:[],files:[{id:30,name:"LICENSE",size:100,folder_id:11,is_video:false,is_audio:false}]}):fetcher(url,options);
+ const contents=await adapter.contents("a",item);assert.equal(contents.kind,"other");assert.equal(contents.entries[0].kind,"other");assert.ok(await adapter.downloadUrl("a",item,contents.entries[0].id));
+ }finally{globalThis.fetch=original;}
+});
 test("per-invocation provider budget stays below the free Worker limit",async()=>{
  const {adapter}=fixture(),original=globalThis.fetch;let calls=0;
  try {globalThis.fetch=async()=>{calls++;return Response.json({space_used:0,space_max:5000});};
