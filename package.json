@@ -1,36 +1,22 @@
 {
-  "name": "linkbox",
-  "version": "1.0.0",
+  "name": "temporary-seedr-share",
   "private": true,
-  "type": "module",
+  "version": "0.1.0",
+  "packageManager": "npm@11.19.1",
+  "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview",
-    "lint": "eslint .",
-    "worker:dev": "wrangler dev src/worker.ts",
-    "worker:deploy": "wrangler deploy"
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "npm run dev --workspace=@temporary-share/web",
+    "dev:worker": "npm run dev --workspace=@temporary-share/worker",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspace=@temporary-share/worker && npm run test:seedr-connection",
+    "test:seedr-connection": "node scripts/seedr-check.test.mjs",
+    "seedr:check": "powershell -NoProfile -File scripts/seedr-connect.ps1",
+    "seedr:configure": "powershell -NoProfile -File scripts/seedr-connect.ps1 -Configure",
+    "db:migrate:local": "npm run db:migrate:local --workspace=@temporary-share/worker",
+    "db:migrate:remote": "npm run db:migrate:remote --workspace=@temporary-share/worker"
   },
-  "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "hono": "latest",
-    "lucide-react": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "react-router-dom": "latest"
-  },
-  "devDependencies": {
-    "@eslint/js": "latest",
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "eslint": "latest",
-    "eslint-plugin-react-hooks": "latest",
-    "eslint-plugin-react-refresh": "latest",
-    "globals": "latest",
-    "typescript": "latest",
-    "typescript-eslint": "latest",
-    "vite": "latest",
-    "wrangler": "latest",
-    "@cloudflare/workers-types": "latest"
-  }
+  "devDependencies": {"typescript": "^5.9.3"}
 }

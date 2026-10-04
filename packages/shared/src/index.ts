@@ -1,0 +1,30 @@
+export type DownloadStatus = "queued" | "fetching_metadata" | "downloading" | "processing" | "ready" | "failed" | "expired" | "deleted" | "deleting";
+
+export interface PublicDownload {
+  id: string;
+  displayName: string;
+  sizeBytes: number;
+  status: DownloadStatus;
+  progress: number;
+  createdAt: string;
+  cleanupAllowedAt: string;
+  expiresAt: string;
+  deletedAt: string | null;
+  errorMessage?: string;
+  playable: boolean;
+}
+
+export type FileKind = "folder" | "video" | "audio" | "image" | "pdf" | "archive" | "text" | "sheet" | "presentation" | "other";
+export interface FileEntry {
+  id: string;
+  displayName: string;
+  sizeBytes: number;
+  kind: FileKind;
+  playable: boolean;
+  preview: "guide" | null;
+}
+export interface FileContents { kind: FileKind; entries: FileEntry[]; preview: "guide" | null; }
+
+export interface StorageSummary { usedBytes: number; availableBytes: number; capacityBytes: number; refreshedAt: string; }
+export interface StorageFullFile { id: string; displayName: string; sizeBytes: number; createdAt: string; cleanupAllowedAt: string; protected: boolean; }
+export interface ApiError { error: string; code: string; details?: { requestedBytes?: number; availableBytes?: number; eligibleFiles?: StorageFullFile[]; protectedFiles?: StorageFullFile[] }; }

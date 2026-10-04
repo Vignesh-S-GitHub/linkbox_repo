@@ -1,0 +1,59 @@
+import type { ApiError, StorageFullFile, StorageSummary } from "@temporary-share/shared";
+import { accountsFromEnv, maxActiveDownloads, maxFileBytes } from "./config";
+import { databaseFor } from "./database/factory";
+import { deleteCommunityItem, expireDueItems } from "./cleanup/cleanup-service";
+import { LiveSeedrAdapter } from "./seedr/live-adapter";
+import { MockSeedrAdapter } from "./seedr/mock-adapter";
+import type { SeedrAdapter } from "./seedr/adapter";
+import { selectAccount } from "./storage/account-selection";
+import type { AccountState, DownloadRow, Env } from "./types";
+import { publicDownload } from "./types";
+import { ApiProblem, magnetIdentity, sha256, validateMagnet } from "./utils/magnet";
+import { enforceSubmissionLimit, releaseFailedSubmission } from "./utils/rate-limit";
+import { readJsonBody } from "./utils/request-body";
+import { serializeSubmission } from "./utils/submission-lock";
+let mockAdapter: MockSeedrAdapter | undefined;
+function adapterFor(env:Env):SeedrAdapter { const accounts=accountsFromEnv(env);if(env.SEEDR_MODE==="mock"){mockAdapter ??=new MockSeedrAdapter(accounts);return mockAdapter;}return new LiveSeedrAdapter(accounts,env); }
+function cors(env:Env,request:Request){const origin=request.headers.get("origin");const allowed=env.ALLOWED_ORIGIN ?? "http://localhost:5173";return {"access-control-allow-origin":origin===allowed?origin:allowed,"access-control-allow-methods":"GET, POST, OPTIONS","access-control-allow-headers":"content-type, x-session-id","vary":"Origin"};}
+function json(value:unknown,status=200,headers:HeadersInit={}){return new Response(JSON.stringify(value),{status,headers:{"content-type":"application/json; charset=utf-8",...headers}});}
+function publicFile(row:DownloadRow){return publicDownload(row);}
+function toStorage(accounts:AccountState[]):StorageSummary{const capacity=accounts.filter(account=>account.enabled).reduce((total,account)=>total+account.capacityBytes,0);const used=accounts.filter(account=>account.enabled).reduce((total,account)=>total+account.usedBytes,0);return {capacityBytes:capacity,usedBytes:used,availableBytes:Math.max(0,capacity-used),refreshedAt:new Date().toISOString()};}
+async function storageSnapshot(database:ReturnType<typeof databaseFor>,adapter:SeedrAdapter){const accounts=await adapter.syncAccounts();await database.syncAccounts(accounts);return toStorage(accounts);}
+function eligibleFiles(rows:DownloadRow[],now:string):StorageFullFile[]{return rows.filter(row=>!row.deletedAt).map(row=>({id:row.publicId,displayName:row.displayName,sizeBytes:row.sizeBytes,createdAt:row.createdAt,cleanupAllowedAt:row.cleanupAllowedAt,protected:row.cleanupAllowedAt>now}));}
+async function refreshRows(database:ReturnType<typeof databaseFor>,adapter:SeedrAdapter){const rows=await database.listActive();return Promise.all(rows.map(async row=>{if(["ready","failed","deleted","expired","deleting"].includes(row.status))return row;try{const item=await adapter.getItem(row.seedrAccountId,row.seedrItemId);return database.update({...row,displayName:item.displayName,sizeBytes:item.sizeBytes,status:item.status,progress:item.progress,playable:item.playable});}catch{return database.update({...row,status:"failed",errorMessage:"Seedr is temporarily unavailable."});}}));}
+async function createDownload(request:Request,env:Env){const session=request.headers.get("x-session-id");if(!session||session.length>128)throw new ApiProblem(400,"invalid_session","A browser session is required.");const body=await readJsonBody(request);const magnet=validateMagnet(body.magnet);enforceSubmissionLimit(session,Number(env.SUBMISSION_COOLDOWN_SECONDS??30));const database=databaseFor(env);const hash=await sha256(magnetIdentity(magnet));const existing=await database.findActiveByHash(hash);if(existing)throw new ApiProblem(409,"duplicate_magnet","That download is already active.");const adapter=adapterFor(env);const [inspection,accounts,active]=await Promise.all([adapter.inspectMagnet(magnet),adapter.syncAccounts(),database.listActive()]);await database.syncAccounts(accounts);if(active.filter(row=>!row.deletedAt&&row.expiresAt>new Date().toISOString()).length>=maxActiveDownloads(env))throw new ApiProblem(429,"active_limit","Shared storage has reached its active download limit.");const requestedBytes=inspection.sizeBytes??0;if(requestedBytes>maxFileBytes(env))throw new ApiProblem(413,"file_too_large","This file is larger than the supported temporary storage limit.");const account=selectAccount(accounts,requestedBytes);if(!account){releaseFailedSubmission(session);const files=eligibleFiles(active,new Date().toISOString());throw new ApiProblem(409,"storage_full","Not enough space in a single storage account.",{requestedBytes,availableBytes:Math.max(0,...accounts.filter(value=>value.enabled).map(value=>value.availableBytes)),eligibleFiles:files.filter(file=>!file.protected),protectedFiles:files.filter(file=>file.protected)});}const item=await adapter.addMagnet(account.id,magnet);const createdAt=new Date();const row:DownloadRow={id:crypto.randomUUID(),publicId:crypto.randomUUID(),seedrAccountId:account.id,seedrItemId:item.itemId,magnetHash:hash,displayName:item.displayName,sizeBytes:item.sizeBytes,status:item.status,progress:item.progress,createdAt:createdAt.toISOString(),cleanupAllowedAt:new Date(createdAt.getTime()+3*3600000).toISOString(),expiresAt:new Date(createdAt.getTime()+24*3600000).toISOString(),deletedAt:null,errorMessage:null,cleanupClaimedAt:null,playable:item.playable};return publicFile(await database.create(row));}
+async function appFetch(request:Request,env:Env):Promise<Response>{const headers=cors(env,request);try{if(request.headers.get("origin") && request.headers.get("origin")!==(env.ALLOWED_ORIGIN??"http://localhost:5173"))throw new ApiProblem(403,"origin_not_allowed","This origin is not allowed.");if(request.method==="OPTIONS")return new Response(null,{status:204,headers});const url=new URL(request.url);const path=url.pathname;if(!path.startsWith("/api/"))return json({error:"Not found",code:"not_found"},404,headers);const database=databaseFor(env);const adapter=adapterFor(env);if(request.method==="GET"&&path==="/api/storage")return json(await storageSnapshot(database,adapter),200,headers);if(request.method==="GET"&&path==="/api/downloads")return json((await refreshRows(database,adapter)).map(publicFile),200,headers);if(request.method==="POST"&&path==="/api/downloads")return json(await serializeSubmission(()=>createDownload(request,env)),201,headers);const match=path.match(/^\/api\/downloads\/([0-9a-f-]+)\/(cleanup|play|download|contents)$/i);if(!match)throw new ApiProblem(404,"not_found","This download does not exist.");const [,publicId,action]=match;const row=await database.findByPublicId(publicId);if(!row)throw new ApiProblem(404,"not_found","This download does not exist.");if(action==="cleanup"&&request.method==="POST"){if(row.deletedAt)return json(publicFile(row),200,headers);const updated=await deleteCommunityItem(database,adapter,publicId,new Date().toISOString());if(!updated)throw new ApiProblem(409,"cleanup_protected","This file is protected from cleanup or is already being deleted.");return json(publicFile(updated),200,headers);}if(request.method!=="GET")throw new ApiProblem(405,"method_not_allowed","Method not allowed.");if(row.deletedAt || row.expiresAt<=new Date().toISOString())throw new ApiProblem(410,"file_unavailable","This file is no longer available in LinkBox.");if(row.status!=="ready")throw new ApiProblem(409,"not_ready","This file is not ready yet.");if(action==="contents"){const contents=await adapter.contents(row.seedrAccountId,row.seedrItemId);if(!contents)throw new ApiProblem(409,"unsupported","Folder browsing and previews are not supported by the verified live integration.");return json(contents,200,headers);}const entryId=url.searchParams.get("entry")??undefined;if(entryId && (entryId.length>80 || !/^[a-z0-9-]+$/i.test(entryId)))throw new ApiProblem(400,"invalid_entry","Invalid file entry.");if(entryId){const contents=await adapter.contents(row.seedrAccountId,row.seedrItemId);if(!contents?.entries.some(entry=>entry.id===entryId))throw new ApiProblem(404,"not_found","This file does not exist.");}const target=action==="play"?await adapter.playbackUrl(row.seedrAccountId,row.seedrItemId,entryId):await adapter.downloadUrl(row.seedrAccountId,row.seedrItemId,entryId);if(!target)throw new ApiProblem(409,"unsupported","This action is not available for this file.");if(url.searchParams.get("format")==="json"){const direct=target==="mock://download"?`${url.origin}${url.pathname}${entryId?`?entry=${encodeURIComponent(entryId)}`:""}`:target;return json({url:direct},200,headers);}if(target==="mock://download")return new Response("LinkBox mock download. This is a synthetic text fixture, not the original media. Media is never stored in this service.",{status:200,headers:{...headers,"content-type":"text/plain","content-disposition":"attachment; filename=linkbox-mock-download.txt"}});return Response.redirect(target,302);}catch(error){if(error instanceof ApiProblem){const response:ApiError={error:error.message,code:error.code,details:error.details};return json(response,error.status,headers);}console.error("Request failed",error instanceof Error?error.message:"unknown error");return json({error:"The service is temporarily unavailable. Please try again.",code:"service_unavailable"},503,headers);}}
+function storageOnly(env: Env): boolean {
+  return env.SEEDR_MODE === "live" && env.SEEDR_ACCESS === "storage-only";
+}
+
+/** Real account quota only: no mock fixtures, database access, personal-file
+ * imports, submissions or cleanup. Storage always comes from Seedr's quota.
+ */
+async function storageAwareFetch(request: Request, env: Env): Promise<Response> {
+  if (!storageOnly(env)) return appFetch(request, env);
+  const headers = { ...cors(env, request), "cache-control": "no-store" };
+  try {
+    const origin = request.headers.get("origin");
+    if (origin && origin !== (env.ALLOWED_ORIGIN ?? "http://localhost:5173")) {
+      throw new ApiProblem(403, "origin_not_allowed", "This origin is not allowed.");
+    }
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
+    const path = new URL(request.url).pathname;
+    if (path === "/api/storage" && request.method === "GET") {
+      const accounts = accountsFromEnv(env).filter(account => account.enabled);
+      if (accounts.length !== 1) throw new ApiProblem(503, "seedr_account_configuration", "Configure exactly one real account for this storage-only connection.");
+      return json(toStorage(await new LiveSeedrAdapter(accounts, env).syncAccounts()), 200, headers);
+    }
+    if (path === "/api/downloads" && request.method === "GET") return json([], 200, headers);
+    if (path.startsWith("/api/downloads") || path === "/api/storage") {
+      throw new ApiProblem(409, "storage_only", "Your real Seedr storage is connected in read-only mode. File actions are not enabled yet.");
+    }
+    throw new ApiProblem(404, "not_found", "Not found.");
+  } catch (error) {
+    if (error instanceof ApiProblem) return json({ error: error.message, code: error.code, details: error.details }, error.status, headers);
+    return json({ error: "Unable to read your Seedr storage. Check the private Worker configuration.", code: "service_unavailable" }, 503, headers);
+  }
+}
+
+export default { fetch: storageAwareFetch, scheduled(_controller:ScheduledController,env:Env,ctx:ExecutionContext){if(storageOnly(env))return;ctx.waitUntil((async()=>{try{const database=databaseFor(env);const adapter=adapterFor(env);await expireDueItems(database,adapter,new Date().toISOString());await storageSnapshot(database,adapter);}catch(error){console.error("Scheduled cleanup failed",error instanceof Error?error.message:"unknown error");}})());} } satisfies ExportedHandler<Env>;
