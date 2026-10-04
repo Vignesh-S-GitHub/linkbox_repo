@@ -10,7 +10,7 @@ import { EmptyState } from "./components/EmptyState";
 import { StorageCard } from "./components/StorageCard";
 import { ActionsSheet } from "./components/ActionsSheet";
 import { AboutPage, SettingsPage } from "./pages/InfoPages";
-import { FileLoading, FolderPage, PlayerPage, PreviewPage, ProgressPage, UnavailablePage } from "./pages/FilePages";
+import { FileLoading, FolderPage, PlayerPage, PreviewPage, ProgressPage, UnavailablePage, LivePreviewPage } from "./pages/FilePages";
 import { StorageFullPage } from "./pages/StorageFullPage";
 import { useDownloads } from "./hooks/useDownloads";
 import { useNavigation } from "./hooks/useNavigation";
@@ -70,6 +70,7 @@ function App() {
   };
   const download = async (file: PublicDownload, child?: FileEntry, newTab = false) => {
     setActions(null);
+    if (!child && fileKind(file.displayName) === "folder") { navigate("folder",file.id); return; }
     // Open synchronously for browsers which block popups after an async request.
     const target = newTab ? window.open("about:blank", "_blank") : null;
     if (target) target.opener = null;
@@ -134,6 +135,7 @@ function App() {
   else if (contentsError) page = <UnavailablePage onFiles={() => navigate("files")} message={contentsError}/>;
   else if (current && route.screen === "folder" && contents) page = <FolderPage file={current} contents={contents} onOpen={child => open(current, child)} onMore={child => setActions({ file: current, entry: child })} onDownload={child => void download(current, child)}/>;
   else if (current && route.screen === "preview" && (entry?.preview === "guide" || (!route.entry && contents?.preview === "guide"))) page = <PreviewPage key={route.id + (route.entry ?? "")} file={current} entry={entry} onDownload={() => void download(current, entry)} onShare={() => void share(current, entry)} onOpenExternal={() => void download(current, entry, true)}/>;
+  else if (current && route.screen === "preview" && ["image","pdf"].includes(entry?.kind??fileKind(current.displayName))) page=<LivePreviewPage key={route.id+(route.entry??"")} file={current} entry={entry} onDownload={()=>void download(current,entry)}/>;
   else if (current && route.screen === "player" && (entry?.playable ?? current.playable)) page = <PlayerPage key={route.id + (route.entry ?? "")} file={current} entry={entry} onDownload={() => void download(current, entry)}/>;
   else page = <section className="unavailable"><BrandIcon name="file" size={70}/><h1>Preview not supported</h1><p>This file can still be downloaded.</p>{current && <button className="primary" onClick={() => void download(current, entry)}><BrandIcon name="download"/>Download</button>}</section>;
 

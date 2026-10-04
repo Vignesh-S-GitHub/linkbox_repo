@@ -27,7 +27,7 @@ name = "temporary-seedr-share-api"
 
 [env.production.vars]
 SEEDR_MODE = "live"
-SEEDR_ACCESS = "storage-only"
+SEEDR_ACCESS = "full"
 ALLOWED_ORIGIN = "https://linkbox-repo.pages.dev"
 MAX_FILE_SIZE_BYTES = "5368709120"
 MAX_ACTIVE_DOWNLOADS = "8"

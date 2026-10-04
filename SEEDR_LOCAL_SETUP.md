@@ -1,72 +1,52 @@
-# Seedr connection: actual account storage
+# Real Seedr V1 connection
 
-The user requested actual storage from one Seedr account, rather than the two-account demo pool. The approved theme is unchanged. Two separate commands are available: `seedr:check` is an unsaved diagnostic; `seedr:configure` saves a private local Worker token and activates live **storage-only** mode.
+LinkBox uses one actual Seedr account and its real quota. The approved theme is unchanged. Tokens are server-only; existing personal Seedr files are not imported or automatically deleted.
 
-## Activate your real account's storage
+## Private setup
 
-Stop the existing development terminal with Ctrl+C, then run:
+Required PAT scopes: `account.read`, `files.read`, `files.write`, `tasks.read`, `tasks.write`, `media.read`. Your full-access token can be used, but a narrower, expiring token is safer. Never paste a token/password into chat, GitHub, screenshots or a `VITE_` variable.
 
 ```powershell
 cd C:\Users\shanm\Projects\LinkBox
 npm run seedr:configure
+npm run db:migrate:local
 npm run dev
 ```
 
-Enter the existing `account.read` token at the hidden prompt. The setup makes one authenticated quota request, validates the storage counts, and atomically updates ignored `apps/worker/.dev.vars`. It selects exactly one account, sets `SEEDR_MODE=live` and `SEEDR_ACCESS=storage-only`, and derives capacity from the real quota instead of assuming 5 GB or 9.5 GB. Unrelated local settings are preserved. Tokens are not printed or passed on command lines. The file stores a plaintext development secret: keep it private; Windows permissions are inherited from the project directory.
+The hidden prompt checks quota, then saves the PAT only in ignored `apps/worker/.dev.vars`. It sets `SEEDR_MODE=live`, `SEEDR_ACCESS=full`, and one enabled account using actual capacity. Restart dev after changing config. Open `http://localhost:5173` and submit only an authorized magnet.
 
-Refresh `http://localhost:5173` and open Storage. Total/used/available come from your account's quota. No mock storage or sample files are returned in this mode. The Files list is empty because existing personal Seedr files are not imported or listed. Add, Play, Download, cleanup and Cron deletion are disabled, with safe backend errors. No database configuration is required for this read-only mode, and no account/media data is uploaded elsewhere.
+`npm run seedr:check` is still a read-only unsaved diagnostic. Successful quota access alone does not prove file-write permissions. Share only sanitized error messages, never `.dev.vars`.
 
-If setup fails, do not share `.dev.vars` or the token. Share only the error text. If the displayed quota does not match Seedr's own storage bar, report the difference so its units can be checked before any write operations. If Windows blocks the script, do not weaken execution policy or protection settings.
+## Verified API contract
 
-## Verified official documentation
+[Official signed-in API Console](https://www.seedr.cc/api/v0.1/console/documentation), inspected/tested 2026-10-04:
 
-On 2026-10-04 we read the user's signed-in [Seedr API Console documentation](https://www.seedr.cc/api/v0.1/console/documentation). This is different from the old REST v1 API used by the existing, unvalidated live adapter.
+- PAT Bearer authentication, base `https://www.seedr.cc/api/v0.1/p`.
+- Quota: `GET /me/quota`, numeric byte fields `space_used` / `space_max`.
+- Isolated folder: `POST /fs/folder`, JSON `name` / `parent_id`.
+- Magnet: `POST /tasks`, JSON **`torrent_magnet` / `folder_id`** from the endpoint form. Generic code examples using `url` / `save_folder_id` are stale and returned 422.
+- Task details: `GET /tasks/{id}` → `task` with `state`, `progress`, `size`, `folder_id` / `folder_created_id`. Only the isolated parent is trusted; task IDs are never treated as file IDs.
+- Contents: `GET /fs/folder/{id}/contents`, recursively bounded underneath the owned parent.
+- Direct file: `GET /download/file/{id}/url` → temporary URL; range delivery verified.
+- Video: documented `GET /presentation/fs/item/{id}/video/url` → HLS URL; HLS.js/light + native controls. Modern video route returned 400 for the test.
+- Deletion: `DELETE /tasks/{id}` does not delete files; `DELETE /fs/folder/{id}` removes the owned content. Both are called only after validating ownership and task association, and confirmed 404 is idempotent success.
 
-- API base: `https://www.seedr.cc/api/v0.1/p`.
-- Personal Access Tokens use `Authorization: Bearer <token>`.
-- `GET /me/quota` reads storage/bandwidth quota; `account.read` is the read-only account permission.
-- The reference lists torrent tasks, filesystem contents, temporary file download URLs and media presentations.
-- The official example submits a task with JSON fields `url` and `save_folder_id`.
-- Deleting a task is explicitly different from deleting its completed files. Never use a task ID as a file/folder ID.
+No size-only preflight is documented. Unknown-size torrents use the roomiest non-transferring account; Seedr enforces account fit, metadata later enforces the configured size cap. Do not trust `xl`. Whole-folder ZIP init request bodies are undocumented; download individual files instead. Deep folder trees, provider restrictions, unsupported browser codecs or unavailable transcoding can fail safely without a paid workaround.
 
-The user's successful read-only diagnostic verified numeric `space_used` and `space_max` fields. The Worker parses those counts strictly with PAT authentication and skips disabled accounts. Storage-only mode always uses the actual current quota, including capacity changes. Full mode still rejects configuration-capacity mismatches. Compare byte units with the real account's displayed storage before enabling writes. The reference does not specify the full task-to-completed-folder contract or a magnet-size preflight endpoint. Unknown values must not become zero-byte files or invented IDs. The old v1 guesses have been removed; unverified transfer/cleanup/delivery methods fail closed. Never put a PAT into a `_BASIC_AUTH` secret or enable full mode yet.
+## Lifetime and safety
 
-## 1. Create a narrowly scoped test token yourself
+The app persists D1 admission before Seedr operations. Every item has a dedicated `LinkBox-<public UUID>` folder, with ownership checkpoints. Never rename it or move personal files into it. New items are protected for 3h, become cleanup eligible after 3h, and expire after 24h. Cleanup is mainly offered when a new submission needs storage. Cron runs hourly; stale claims recover after 5 minutes. No public admin/time-bypass endpoint exists.
 
-In Seedr's API Console, open Personal Access Tokens and its create-token form.
+Full mode can upload submissions to Seedr and delete eligible **app-managed** files. `SEEDR_ACCESS=storage-only` is an explicit rollback switch that prevents all file actions/Cron. D1 stores no media or PAT.
 
-- Name it `LinkBox local quota check`.
-- Select only `account.read` for this first test.
-- Choose a short expiry if offered.
-- Do not enable write, subscription/payment, or settings permissions.
-- Keep the resulting token private. Never paste it into chat or a screenshot.
-
-If the form does not offer those permissions, share a screenshot of the empty form with private information hidden before creating anything. Do not use the documentation's auto-generated 6-hour token button without checking its granted permissions.
-
-## 2. Run the read-only check
-
-In your normal PowerShell terminal:
+## Cloudflare production
 
 ```powershell
 cd C:\Users\shanm\Projects\LinkBox
-npm run seedr:check
+npm run db:migrate:remote
+cd apps\worker
+npx wrangler secret put SEEDR_ACCOUNT_A_TOKEN --env production
+npx wrangler deploy --env production
 ```
 
-Paste the token only into the hidden-input prompt. It is passed to the local checker over standard input, not command-line arguments, shell history, browser storage, environment variables, or a saved file. The checker sends it only to Seedr's documented HTTPS quota endpoint. It never prints token values or raw response bodies. It requests no media.
-
-If Windows blocks running the PowerShell script, do not weaken execution policy or endpoint protection. Report the error so we can use an approved local credential-entry method instead.
-
-A successful check prints `authenticatedQuotaRequest: true` and a **field-name/type-only** response shape. This confirms that Seedr accepted one quota request, not that all live app functionality works. Copy that diagnostic into chat; it contains no quota values, account details or token. Clear your clipboard after entering the token. You can revoke this test token after the check.
-
-## 3. What remains before a real-file test
-
-- Configure private PAT secrets locally after confirming actual capacity. PAT quota requests and strict parsers are implemented; transfers and delivery still need verified response mappings.
-- The user chose one account for the real local test. Verify its quota units and actual capacity; a mock 9.5 GB display is not evidence of real available space.
-- Resolve metadata-size support without trusting a magnet's user-supplied `xl` field.
-- Verify task IDs, completion mapping, signed delivery, and media availability separately.
-- Configure metadata persistence and lock down database cleanup functions before enabling writes/cron.
-- Store final tokens only in ignored local Worker secrets, then Cloudflare Worker Secrets for deployment.
-- Start with read-only account access. Request the specific task/file write permissions only when the test is ready.
-- Add one small authorized test download, then test cleanup only for that application-created item with explicit user approval. Never import existing personal files into automatic cleanup.
-
-The account's quota request has succeeded in the user's terminal. Actual app activation requires running `seedr:configure` privately; the agent has not received the token. No GitHub upload or Cloudflare deployment is part of this step.
+Enter the PAT privately at the prompt. For token rotation, this changes the Worker Secret without publishing the token to GitHub. Pages receives only the public API URL. Applying migrations must precede Worker deployment. See README for GitHub auto-deploy and verification.

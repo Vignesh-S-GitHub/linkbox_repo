@@ -26,6 +26,7 @@ function setup() {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec("PRAGMA foreign_keys=ON");
   sqlite.exec(readFileSync(join(__dirname, "../migrations/0001_metadata.sql"), "utf8"));
+  sqlite.exec(readFileSync(join(__dirname, "../migrations/0002_live_guards.sql"), "utf8"));
   const binding = {
     prepare(sql) {
       let values = [];
@@ -45,6 +46,31 @@ function setup() {
 }
 const tests = [];
 const test = (name, run) => tests.push([name, run]);
+
+test("D1 submission lease and session/IP cooldown are shared across isolates", async () => {
+ const {sqlite,db,binding}=setup(); const other=new D1MetadataDatabase(binding);
+ try {const token=await db.acquireLease("submission",1000,120000);assert.ok(token);
+ assert.equal(await other.acquireLease("submission",1001,120000),null);
+ await other.releaseLease("submission","not-the-owner");assert.equal(await other.acquireLease("submission",1002,120000),null);
+ await db.releaseLease("submission",token);assert.ok(await other.acquireLease("submission",1003,120000));
+ assert.ok(await db.acquireLease("session:hashed",1000,30000));assert.equal(await other.acquireLease("session:hashed",29999,30000),null);
+ assert.ok(await other.acquireLease("session:hashed",31000,30000));await db.pruneGuards(200000);assert.equal(sqlite.prepare("SELECT count(*) AS n FROM request_guards").get().n,0);
+ }finally{sqlite.close();}
+});
+test("D1 stale cleanup claim is recovered with CAS and cannot be stolen early",async()=>{
+ const {sqlite,db}=setup();try{await db.syncAccounts([account]);const row=await db.create(fixture(25));
+ const claimed=await db.claimForCleanup(row.publicId,now);assert.equal(await db.claimForCleanup(row.publicId,new Date(Date.parse(now)+299999).toISOString()),null);
+ const recovered=await db.claimForCleanup(row.publicId,new Date(Date.parse(now)+300000).toISOString());assert.ok(recovered);
+ assert.equal((await db.update({...claimed,status:"deleted",deletedAt:now})).status,"deleting");
+ await db.update({...recovered,status:"expired",deletedAt:recovered.cleanupClaimedAt});assert.equal((await db.listActive()).length,0);
+ }finally{sqlite.close();}
+});
+test("expiration retries one outage without skipping other due items",async()=>{
+ const {sqlite,db}=setup();try{await db.syncAccounts([account]);const failed=await db.create(fixture(25));const good=await db.create(fixture(24));
+ assert.equal(await expireDueItems(db,{async deleteItem(_account,item){if(item===failed.seedrItemId)throw Error("outage");}},now),1);
+ assert.equal((await db.findByPublicId(failed.publicId)).deletedAt,null);assert.equal((await db.findByPublicId(good.publicId)).status,"expired");
+ }finally{sqlite.close();}
+});
 
 test("live database requires D1 and never falls back to demo metadata", async () => {
   assert.throws(() => databaseFor({ SEEDR_MODE: "live" }), e => e.code === "database_unavailable");

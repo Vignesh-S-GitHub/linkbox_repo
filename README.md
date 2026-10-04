@@ -4,7 +4,7 @@ A mobile-first temporary shared-download app using the approved LinkBox assets. 
 
 ## Current status
 
-Work locally in `C:\Users\shanm\Projects\LinkBox`. Your single real Seedr account is connected for **storage-only** reads: the UI shows its actual quota, not the 9.5 GB demonstration pool. Real transfers, playback, delivery and deletion remain disabled until their API mappings are verified. A full-access token alone does not enable these features.
+LinkBox V1 supports real magnet submission, progress, folder browsing, HLS/native media playback, direct file downloads, community cleanup after 3 hours, and automatic expiry after 24 hours. The approved UI remains unchanged. Your single account uses its **actual Seedr quota**, not the 9.5 GB demo pool. Only downloads created through LinkBox are shared or cleanup-managed; existing personal Seedr files are not imported.
 
 **Supabase is no longer used.** Cloudflare Pages serves the frontend, Workers runs the privileged API, **D1 stores metadata**, and Worker Cron Triggers schedule cleanup. Actual downloaded files stay exclusively on Seedr. No media is stored in Pages, Workers, D1, GitHub or an R2 bucket.
 
@@ -24,7 +24,7 @@ Pages provides a static frontend without a running server. Workers keeps tokens 
 ```text
 apps/web/                    React, Vite, TypeScript, Tailwind and brand assets
 apps/worker/src/database/    D1 implementation; in-memory mock implementation
-apps/worker/src/seedr/       Adapter interface, mock adapter, live PAT quota client
+apps/worker/src/seedr/       Mock/live adapters, verified PAT API and ownership checks
 apps/worker/src/cleanup/     Shared community/automatic cleanup logic
 apps/worker/migrations/      Active Cloudflare D1 SQLite migrations
 apps/worker/wrangler.toml    Local/production D1 bindings, vars and hourly Cron
@@ -62,7 +62,7 @@ Never paste your token into chat or a `VITE_` variable. To replace the old token
 npm run seedr:configure
 ```
 
-The hidden prompt verifies the documented quota endpoint before atomically saving the token to ignored `apps/worker/.dev.vars`. It configures exactly one enabled account using its actual `space_max` capacity and leaves `SEEDR_ACCESS=storage-only`. Restart `npm run dev` afterwards.
+The hidden prompt verifies quota before atomically saving the token to ignored `apps/worker/.dev.vars`. It configures one enabled account with `SEEDR_MODE=live` and `SEEDR_ACCESS=full`, using actual `space_max` capacity. Required scopes are `account.read`, `files.read`, `files.write`, `tasks.read`, `tasks.write`, and `media.read`. Restart dev afterwards. `SEEDR_ACCESS=storage-only` remains an explicit emergency read-only switch that disables file actions and Cron.
 
 `npm run seedr:check` performs a private, non-persistent quota diagnostic. Neither command changes or deletes Seedr files. A non-expiring full-access token is especially sensitive: use only the required scopes where possible and revoke/rotate it if exposed. An account-wide token does not authorize the app to delete your existing personal files.
 
@@ -83,14 +83,14 @@ Use this synthetic hash only in mock mode. Mock downloads are labelled text fixt
 - Live single-account storage uses the actual connected quota.
 - The 9.5 GB logical pool exists only in the original two-account mock configuration.
 - An entire item must fit one account; combined free space is never treated as contiguous.
-- Account selection uses best fit to reduce fragmented space.
+- Known-size account selection uses best fit. Seedr has no documented size-only magnet preflight: unknown-size tasks choose the account with most free space, one transferring item per account, and rely on Seedr to reject an item that cannot fit. `xl` is never trusted. After metadata resolves, oversized app-owned content is stopped/removed and marked failed. Exact requested/free/shortfall numbers are shown only when size is known; unknown-size errors say metadata is pending.
 - First 3 hours: protected. At 3 hours: cleanup eligible. At 24 hours: automatic deletion due.
 - Community cleanup is offered when storage is needed, not as encouragement to delete randomly.
 - D1 enforces lifecycle timestamps, foreign keys, status/progress constraints and active-magnet uniqueness.
 - One conditional SQL `UPDATE … RETURNING` atomically claims cleanup across Worker instances.
 - Progress updates cannot undo claims or resurrect deleted records.
-- Cleanup errors release their own claim for retry; confirmed missing remote content must be handled idempotently by the adapter.
-- The hourly Cron handles at most 50 expired candidates per run. With the default 8-active-item limit, normal expiry is within approximately one hour after 24 hours.
+- Cleanup errors release only their own claim. A claim abandoned for 5 minutes is atomically reclaimable; missing tasks/folders are successful idempotent cleanup. One outage does not skip other due items.
+- Hourly Cron selects up to 8 expired records. Normal cleanup occurs within approximately one cycle after 24 hours; outages may delay removal. Expired playback/download access is blocked immediately even before physical removal.
 
 D1 stores only account metadata and app-managed download records. User-facing API responses explicitly omit internal account IDs, remote IDs, secret references and tokens.
 
@@ -124,7 +124,7 @@ npx wrangler secret put SEEDR_ACCOUNT_A_TOKEN --env production
 npx wrangler deploy --env production
 ```
 
-Enter the token at Wrangler's private prompt. Production uses `SEEDR_MODE=live`, `SEEDR_ACCESS=storage-only`, one account and hourly Cron. Its permitted origin is `https://linkbox-repo.pages.dev`. Do not flip to full access yet: unverified file operations intentionally fail closed.
+Enter the token at Wrangler's private prompt. Production V1 uses `SEEDR_MODE=live`, `SEEDR_ACCESS=full`, one actual account and hourly Cron. Its allowed origin is `https://linkbox-repo.pages.dev`. Apply all D1 migrations **before** deploying changed Worker code. For read-only operation explicitly set `SEEDR_ACCESS=storage-only` and redeploy.
 
 D1 uses a platform binding, not a public database endpoint. The Pages frontend has no direct D1 access. Worker secrets hold credentials; D1 stores only references.
 
@@ -157,7 +157,7 @@ npm run dev:cron
 Invoke-WebRequest 'http://localhost:8787/__scheduled?cron=0+*+*+*+*'
 ```
 
-Use mock mode for synthetic cleanup tests. Local Cron does not run automatically as a production clock. Successful triggering is not evidence of real Seedr deletion while live cleanup is disabled.
+Use mock mode for safe synthetic cleanup tests. In current Wrangler, you can also invoke the local handler at `http://localhost:8787/cdn-cgi/local/scheduled`. Do not alter production timestamps to speed up testing. Live Cron deletes only expired, ownership-verified LinkBox folders/tasks.
 
 ## Environment configuration
 
@@ -167,33 +167,45 @@ Use mock mode for synthetic cleanup tests. Local Cron does not run automatically
 | --- | --- |
 | `DB` | D1 binding in Wrangler; not an environment secret |
 | `SEEDR_MODE` | `mock` or `live` |
-| `SEEDR_ACCESS` | `storage-only` until live file operations are verified |
+| `SEEDR_ACCESS` | `full` for V1; `storage-only` explicitly disables file operations/Cron |
 | `SEEDR_ACCOUNT_CONFIG` | Internal account metadata and secret references |
 | `SEEDR_ACCOUNT_A_TOKEN` | Private Seedr PAT in Worker secrets |
 | `ALLOWED_ORIGIN` | Exact permitted frontend origin |
 | `MAX_FILE_SIZE_BYTES` | Maximum entire item size |
 | `MAX_ACTIVE_DOWNLOADS` | Shared active-submission cap, default 8 |
-| `SUBMISSION_COOLDOWN_SECONDS` | Default 30-second session cooldown |
-| `TURNSTILE_SECRET_KEY` | Reserved optional integration; not yet enforced |
+| `SUBMISSION_COOLDOWN_SECONDS` | D1-backed 30-second session/IP cooldown |
+| `TURNSTILE_SECRET_KEY` | Optional server verification; keep unset unless a frontend token is supplied |
 | `VITE_API_URL` | Public Worker URL only |
 
 ## Adding another Seedr account
 
 Append an enabled object to `SEEDR_ACCOUNT_CONFIG` with an internal ID, label, actual capacity and a distinct `secretKeyReference`. Store that token with `wrangler secret put`. D1 upserts metadata during storage refresh; no seed migration or selection rewrite is necessary. Removed accounts retain metadata history but are disabled when remaining accounts sync.
 
-The current storage-only connection deliberately requires one account. Expanding real file pooling is a later verified integration step; the account-selection logic already handles arbitrary account counts.
+Full mode handles up to 8 configured accounts without rewriting selection logic. IDs and token references must be distinct, and capacities must be positive whole byte counts. Keep disabled accounts and their credentials configured until their old records are cleaned; removing an account or token immediately prevents cleanup of those records. No individual download spans accounts.
 
 ## Switching mock → full live
 
 The signed-in [official Seedr API reference](https://www.seedr.cc/api/v0.1/console/documentation), inspected on 2026-10-04, documents PAT Bearer authentication at `https://www.seedr.cc/api/v0.1/p`, quota reads, tasks, filesystem operations and temporary delivery URLs. Quota field names, byte counts and actual account access have been tested.
 
-Before enabling full live mode, verify task response schemas, task-to-folder/file completion mapping, temporary media/download URL formats, and safe app-owned cleanup. The reference does not document a magnet-size preflight endpoint; do not assume a missing size is zero or trust a user-supplied size. Persist safe ownership before any destructive path is enabled. D1 replacing Supabase does not solve these Seedr API limitations.
+Task/folder mapping, temporary delivery and ownership-scoped deletion were verified with a Creative Commons sample. Each download gets an isolated `LinkBox-<public UUID>` folder. D1 admission is persisted before Seedr writes; folder/task IDs are checkpointed before subsequent operations. Uncertain POSTs are reconciled by the exact owned folder rather than blindly replayed. Use the hidden setup helper, apply local migrations, start dev, then test an authorized magnet.
+
+### Verified API and limitations
+
+- API Console's **endpoint form** documents `POST /tasks` JSON fields `torrent_magnet` and `folder_id`. Its generic code example uses obsolete `url` / `save_folder_id`; those returned HTTP 422 and are not used.
+- `POST /fs/folder` uses `name` / `parent_id`. The task's `folder_id` must match the isolated parent; completed content is traversed only beneath that parent. IDs are not interchangeable.
+- `GET /download/file/{id}/url` returns a temporary URL. Documented `GET /presentation/fs/item/{id}/video/url` returns HLS; browser playback lazy-loads HLS.js with native controls. No media proxy is used. Modern `/presentations/file/{id}/video` returned HTTP 400 in the test, so the working documented compatibility endpoint is used.
+- Whole-folder archive initialization has an undocumented request-body schema; V1 offers **individual file downloads** instead of inventing ZIP requests. Folder entries are flattened, bounded to 8 folders / 1,000 files; exceptionally large/deep trees fail safely.
+- Each invocation allows at most 48 Seedr requests, below the free Worker's external-subrequest limit. Unusually expensive reconciliation/cleanup resumes on a later polling or Cron cycle rather than exceeding that budget. Provider outages can delay physical deletion; delivery is blocked as soon as the 24-hour deadline passes.
+- Supported media is determined by Seedr's file flags; codecs, transcoding readiness and plan restrictions can still prevent playback. Images/PDFs use direct native previews when the browser supports them; other files remain downloadable.
+- Expiring Seedr delivery URLs are bearer capabilities. They contain no account PAT, but anyone receiving a copied temporary URL may use it until Seedr expires it. Already-issued direct links cannot be instantly revoked by D1; deleting the source removes the file.
+- All files placed inside an app-owned folder are temporary/shared. Do not manually move personal content into these folders or rename them; ownership mismatches fail closed. D1 backups do not restore deleted Seedr media.
+- Optional Turnstile is architected/server-verified, not enabled by default. If enabled, clients must supply `turnstileToken`; no widget is configured for this release. CORS is not authentication and public anonymous access cannot be made abuse-proof with cooldowns alone.
 
 ## Security and remaining production work
 
 Magnet validation, bounded request bodies, CORS, public UUIDs, safe errors, duplicate constraints, cleanup validation and server-only tokens are implemented. Anonymous browser identifiers contain no requested email, name, phone or location. Polling is 15 seconds for pending transfers, otherwise 60 seconds, only while visible.
 
-Current cooldown/submission serialization is per Worker isolate, not globally durable. Cross-isolate submission reservations and abuse enforcement remain required before public full live writes. Turnstile is reserved but not enforced. CORS is not authentication. Cleanup claims fail closed if a process dies after claiming; automatic stale-claim reconciliation is not implemented, so investigate such rows before manually releasing them. Do not deploy this as an unrestricted public full-access account bridge.
+Submission leases, cooldowns (hashed session and daily hashed Cloudflare IP), and polling leases are durable in D1 across isolates. Active downloads are capped at 8; request bodies and provider JSON are bounded, redirects never forward PATs, and all public IDs are opaque. Only app-managed metadata/files are exposed. Ready-state polling stops, quota is cached for 60 seconds, and at most two transferring rows are refreshed per request. Guard rows are pruned by Cron. This is a shared anonymous service: monitor quotas, restrict the allowed origin and use the read-only switch if abuse occurs. Avoid non-expiring account-wide tokens where a short-lived narrowly scoped PAT suffices.
 
 ## Free-tier considerations
 
@@ -218,5 +230,5 @@ Tests include existing mock API/business coverage, private-token setup, and real
 - Live storage but no files: expected in storage-only mode; no mock or personal files are imported.
 - Storage 503: check the private PAT/config; manual redirects are rejected and tokens never forwarded.
 - Fragmented storage: a file must fit one account even when aggregate free space looks sufficient.
-- Old file pending cleanup: Cron runs hourly; live storage-only never deletes, and claimed rows need reconciliation after crashes.
+- Old file pending cleanup: Cron runs hourly; provider outages retry next cycle and stale claims recover after 5 minutes. Storage-only never deletes.
 - Build/migration `spawn EPERM`: run the normal commands in user PowerShell and report the output; do not bypass security.

@@ -3,10 +3,10 @@ $ErrorActionPreference = 'Stop'
 $taskSeedrNode = Get-Command node -ErrorAction Stop
 $taskSeedrChecker = Join-Path $PSScriptRoot $(if ($Configure) { 'seedr-configure.mjs' } else { 'seedr-check.mjs' })
 Write-Host 'Read-only Seedr check: one storage quota request; no file changes.'
-Write-Host 'Use a Personal Access Token with account.read permission only.'
+Write-Host 'For a diagnostic, account.read is sufficient. Live setup requires account.read, files.read/write, tasks.read/write and media.read.'
 if ($Configure) {
-    Write-Host 'This configures ONE real account in storage-only mode and saves its token in ignored apps/worker/.dev.vars.'
-    Write-Host 'No file actions or automatic cleanup will run. Keep this local configuration file private.'
+    Write-Host 'This configures ONE real account in full LinkBox V1 mode and saves its token in ignored apps/worker/.dev.vars.'
+    Write-Host 'Only app-managed downloads are shared; cleanup after 3h and expiry after 24h can remove them. Keep the local config private.'
 } else {
     Write-Host 'Your token will not be saved, printed, or passed on the command line.'
 }
