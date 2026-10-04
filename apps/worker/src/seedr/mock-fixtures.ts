@@ -1,5 +1,6 @@
 import type { FileEntry } from "@temporary-share/shared";
 import type { DownloadRow } from "../types";
+import { fileKind } from "../../../../packages/shared/src/file-kind";
 
 const gib = 1024 ** 3;
 const mib = 1024 ** 2;
@@ -19,7 +20,7 @@ export function mockRows(now = Date.now()): DownloadRow[] {
       magnetHash: `fixture-${index + 1}`, displayName: name, sizeBytes: Math.round(size), status, progress,
       createdAt: new Date(created).toISOString(), cleanupAllowedAt: new Date(created + 3 * 3600000).toISOString(),
       expiresAt: new Date(created + 24 * 3600000).toISOString(), deletedAt: null, errorMessage: null,
-      cleanupClaimedAt: null, playable: /\.(mkv|mp3)$/.test(name) };
+      cleanupClaimedAt: null, playable: /\.(mkv|mp3)$/.test(name), kind: fileKind(name), fileCount: name === "Project Files" ? 7 : null };
   });
 }
 

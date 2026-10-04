@@ -4,6 +4,7 @@ const { join } = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
 const { D1MetadataDatabase } = require("./logic-test-build/apps/worker/src/database/d1-database.js");
 const { databaseFor } = require("./logic-test-build/apps/worker/src/database/factory.js");
+const worker = require("./logic-test-build/apps/worker/src/index.js").default;
 const { deleteCommunityItem, expireDueItems } = require("./logic-test-build/apps/worker/src/cleanup/cleanup-service.js");
 
 // Real SQLite executes the SAME migration/statements behind a small D1 binding
@@ -20,13 +21,14 @@ function fixture(hours, extra = {}) {
     sizeBytes: 1000, status: "ready", progress: 100, createdAt: created.toISOString(),
     cleanupAllowedAt: new Date(+created + 3 * 3600000).toISOString(),
     expiresAt: new Date(+created + 24 * 3600000).toISOString(),
-    deletedAt: null, errorMessage: null, cleanupClaimedAt: null, playable: false, ...extra };
+    deletedAt: null, errorMessage: null, cleanupClaimedAt: null, playable: false, kind: null, fileCount: null, ...extra };
 }
 function setup() {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec("PRAGMA foreign_keys=ON");
   sqlite.exec(readFileSync(join(__dirname, "../migrations/0001_metadata.sql"), "utf8"));
   sqlite.exec(readFileSync(join(__dirname, "../migrations/0002_live_guards.sql"), "utf8"));
+  sqlite.exec(readFileSync(join(__dirname, "../migrations/0003_content_type.sql"), "utf8"));
   const binding = {
     prepare(sql) {
       let values = [];
@@ -46,6 +48,30 @@ function setup() {
 }
 const tests = [];
 const test = (name, run) => tests.push([name, run]);
+
+test("D1 preserves fractional progress and authoritative dotted-folder metadata", async () => {
+ const {sqlite,db}=setup();
+ try {await db.syncAccounts([account]); const row=await db.create(fixture(1,{status:"downloading",progress:1.6,displayName:"Sample.2026 [5.1]",kind:"folder",fileCount:4}));
+ assert.equal(row.progress,1.6);assert.equal(row.kind,"folder");assert.equal(row.fileCount,4);
+ assert.equal((await db.update({...row,progress:6.15})).progress,6.15);
+ await assert.rejects(db.update({...row,kind:"not-a-kind"}),e=>e.code==="database_unavailable");
+ await assert.rejects(db.update({...row,fileCount:1001}),e=>e.code==="database_unavailable");
+ }finally{sqlite.close();}
+});
+
+test("existing ready items backfill owned folder type once without task writes or lifetime resets",async()=>{
+ const {sqlite,db,binding}=setup(),original=globalThis.fetch; let reads=0;
+ const publicId="12345678-1234-4234-8234-123456789012";
+ try {await db.syncAccounts([account]); const timestamp=Date.now();const stored=await db.create(fixture(1,{publicId,seedrItemId:`linkbox:${publicId}:10:20`,displayName:"Demo.2026 [5.1]",createdAt:new Date(timestamp-3600000).toISOString(),cleanupAllowedAt:new Date(timestamp+2*3600000).toISOString(),expiresAt:new Date(timestamp+23*3600000).toISOString()}));
+ globalThis.fetch=async(url,options)=>{reads++;assert.equal(options.method,"GET");assert.ok(url.endsWith("/fs/folder/10/contents"));return Response.json({id:10,path:`LinkBox-${publicId}`,parent:0,folders:[],files:[
+ {id:30,name:"Sample.mp4",folder_id:10,size:99,is_video:true},{id:31,name:"English.srt",folder_id:10,size:1}]});};
+ const env={DB:binding,SEEDR_MODE:"live",SEEDR_ACCESS:"full",SEEDR_ACCOUNT_A_TOKEN:"fixture-secret",SEEDR_ACCOUNT_CONFIG:JSON.stringify([{id:account.id,label:"Test",enabled:true,capacityBytes:5000,secretKeyReference:"SEEDR_ACCOUNT_A_TOKEN"}])};
+ const response=await worker.fetch(new Request("http://localhost/api/downloads"),env);assert.equal(response.status,200);
+ const [value]=await response.json();assert.equal(value.kind,"folder");assert.equal(value.fileCount,2);assert.equal(value.createdAt,stored.createdAt);assert.equal(value.expiresAt,stored.expiresAt);
+ assert.equal(reads,1);assert.equal(JSON.stringify(value).includes("fixture-secret"),false);assert.equal(value.seedrItemId,undefined);
+ await worker.fetch(new Request("http://localhost/api/downloads"),env);assert.equal(reads,1);
+ }finally{globalThis.fetch=original;sqlite.close();}
+});
 
 test("D1 submission lease and session/IP cooldown are shared across isolates", async () => {
  const {sqlite,db,binding}=setup(); const other=new D1MetadataDatabase(binding);

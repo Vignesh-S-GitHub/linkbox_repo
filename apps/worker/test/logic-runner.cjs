@@ -8,6 +8,8 @@ const { LiveSeedrAdapter } = require("./logic-test-build/apps/worker/src/seedr/l
 const { SeedrTokenClient, parseQuota } = require("./logic-test-build/apps/worker/src/seedr/token-client.js");
 const { parseRoute, routeUrl, screenNames, isFolderView } = require("./logic-test-build/apps/web/src/lib/routes.js");
 const worker = require("./logic-test-build/apps/worker/src/index.js").default;
+const {downloadKind,formatProgress}=require("./logic-test-build/packages/shared/src/file-kind.js");
+const {qualityChoices}=require("./logic-test-build/apps/web/src/lib/stream-options.js");
 
 const gib = 1024 ** 3;
 const accounts = () => [
@@ -24,6 +26,30 @@ const makeRow = (createdAt, publicId = "public") => ({
 const adapter = { deleteItem: async () => undefined };
 const tests = [];
 const test = (name, fn) => tests.push([name, fn]);
+
+test("authoritative type overrides names, including folders ending in media extensions",()=>{
+ assert.equal(downloadKind({displayName:"Demo.2026 [5.1]",kind:"folder"}),"folder");
+ assert.equal(downloadKind({displayName:"Folder.mp4",kind:"folder"}),"folder");
+ assert.equal(downloadKind({displayName:"LICENSE",kind:"other"}),"other");
+ assert.equal(downloadKind({displayName:"Sample.mp4",kind:null}),"video");
+});
+test("progress displays small decimal percentages without claiming premature completion",()=>{
+ for(const [input,expected] of [[1.6,"1.6%"],[6.15,"6.15%"],[100,"100%"],[99.999,"99.99%"],[0,"0%"],[0.001,"<0.01%"],[NaN,"0%"],[-3,"0%"]])assert.equal(formatProgress(input),expected);
+});
+test("quality choices use only actual variants and preserve their stream indexes",()=>{
+ assert.deepEqual(qualityChoices([]),[]);
+ assert.deepEqual(qualityChoices([{height:360},{height:720},{height:1080}]),[{index:0,label:"360p"},{index:1,label:"720p"},{index:2,label:"1080p"}]);
+ assert.deepEqual(qualityChoices([{bitrate:1600000},{}]),[{index:0,label:"1.6 Mbps"},{index:1,label:"Stream 2"}]);
+ assert.deepEqual(qualityChoices([{height:720,bitrate:2000000},{height:720,bitrate:4000000}]),[{index:0,label:"720p · 2.0 Mbps"},{index:1,label:"720p · 4.0 Mbps"}]);
+ assert.deepEqual(qualityChoices([{height:NaN,bitrate:-1}]),[{index:0,label:"Stream 1"}]);
+});
+test("full lazy HLS build retains separate audio support without extra player options",()=>{
+ const Hls=require("hls.js");assert.ok(Hls.DefaultConfig.audioStreamController);assert.ok(Hls.DefaultConfig.audioTrackController);
+ const {readFileSync}=require("node:fs"),{join}=require("node:path");
+ const source=readFileSync(join(__dirname,"../../web/src/components/StreamMedia.tsx"),"utf8");
+ assert.ok(source.includes('import("hls.js")'));assert.ok(source.includes('aria-label="Streaming quality"'));
+ for(const removed of ['hls.js/light','Playback speed','Video fit','Add subtitle file','PictureInPicture2'])assert.ok(!source.includes(removed));
+});
 
 test("actual folder contents override dotted torrent-name preview routes", () => {
   assert.equal(isFolderView({screen:"preview",id:"public"},"folder"),true);

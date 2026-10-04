@@ -112,14 +112,17 @@ export class LiveSeedrAdapter implements SeedrAdapter {
     if (!folder) return { itemId, displayName: "File unavailable", sizeBytes: 0, status: "failed", progress: 0, playable: false };
     const task = await this.task(client, id);
     const size = task ? numeric(task.size) : numeric(folder.size);
-    const progress = task && typeof task.progress === "number" ? Math.min(100, Math.max(0, Math.floor(task.progress))) : 0;
+    if (task && (typeof task.progress !== "number" || !Number.isFinite(task.progress))) throw invalid();
+    const progress = task ? Math.min(100, Math.max(0, Number(task.progress))) : 0;
     const finished = task ? task.state === "finished" : numeric(folder.size) > 0;
     const failed = task && (task.error || ["failed", "error", "cancelled"].includes(String(task.state)));
     const files = finished ? await this.files(client, id, folder) : [];
     const displayName = files.length === 1 ? files[0].entry.displayName : task ? name(task.name) : "Shared files";
     return { itemId: key(id), displayName, sizeBytes: size,
       status: failed ? "failed" : finished && files.length ? "ready" : progress >= 100 ? "processing" : progress > 0 ? "downloading" : "fetching_metadata",
-      progress: finished ? 100 : progress, playable: files.length === 1 && files[0].entry.playable };
+      progress: finished ? 100 : progress, playable: files.length === 1 && files[0].entry.playable,
+      kind: finished && files.length ? files.length === 1 ? files[0].entry.kind : "folder" : null,
+      fileCount: finished ? files.length : null };
   }
   private async files(client: SeedrTokenClient, id: Identity, root: ObjectValue): Promise<RemoteFile[]> {
     const result: RemoteFile[] = [], pending = [root]; let visited = 0;

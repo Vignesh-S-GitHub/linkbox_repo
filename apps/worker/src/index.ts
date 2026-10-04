@@ -49,10 +49,18 @@ async function refreshRows(database: Database, adapter: SeedrAdapter, env: Env) 
   const result: DownloadRow[] = []; let refreshed = 0;
   // Sequential bounded work avoids exhausting the free Worker's subrequest limit.
   for (const row of rows) {
-    if (["ready", "failed", "deleted", "expired", "deleting"].includes(row.status) || row.expiresAt <= new Date().toISOString() ||
-        refreshed >= 2 || !await database.acquireLease(`poll:${row.publicId}`, Date.now(), 15000)) { result.push(row); continue; }
+    const reconcile = row.status === "ready" && !row.kind;
+    if ((!reconcile && ["ready", "failed", "deleted", "expired", "deleting"].includes(row.status)) || row.expiresAt <= new Date().toISOString() ||
+        refreshed >= 2 || !await database.acquireLease(`poll:${row.publicId}`, Date.now(), reconcile ? 300000 : 15000)) { result.push(row); continue; }
     refreshed++;
     try {
+      if (reconcile) {
+        // Read-only backfill for existing ready items. Do not replay tasks,
+        // reset lifetimes or delete anything during type reconciliation.
+        const contents = await adapter.contents(row.seedrAccountId, row.seedrItemId);
+        result.push(contents ? await database.update({ ...row, kind: contents.kind, fileCount: contents.entries.length }) : row);
+        continue;
+      }
       const item = await adapter.getItem(row.seedrAccountId, row.seedrItemId);
       if (item.sizeBytes > maxFileBytes(env)) {
         // Provider resolves size after acceptance. Policy rejects oversized owned
@@ -61,10 +69,11 @@ async function refreshRows(database: Database, adapter: SeedrAdapter, env: Env) 
         result.push(await database.update({ ...row, seedrItemId: item.itemId, sizeBytes: item.sizeBytes, status: "failed", playable: false,
           errorMessage: "This file exceeds the supported size limit and was removed." }));
       } else result.push(await database.update({ ...row, seedrItemId: item.itemId, displayName: item.displayName, sizeBytes: item.sizeBytes,
-        status: item.status, progress: item.progress, playable: item.playable, errorMessage: item.status === "failed" ? "Download failed or was removed from Seedr." : null }));
+        status: item.status, progress: item.progress, playable: item.playable, kind: item.kind ?? null, fileCount: item.fileCount ?? null,
+        errorMessage: item.status === "failed" ? "Download failed or was removed from Seedr." : null }));
     } catch {
       // A transient outage must not permanently fail the task or lose ownership.
-      result.push(await database.update({ ...row, errorMessage: "Seedr is temporarily unavailable. Progress will retry automatically." }));
+      result.push(reconcile ? row : await database.update({ ...row, errorMessage: "Seedr is temporarily unavailable. Progress will retry automatically." }));
     }
   }
   return result;
@@ -125,7 +134,7 @@ async function createDownload(request: Request, env: Env) {
         row = await database.update({ ...row, seedrItemId: itemId, status: "fetching_metadata" });
       } });
       row = await database.update({ ...row, seedrItemId: item.itemId, displayName: item.displayName, sizeBytes: item.sizeBytes,
-        status: item.status, progress: item.progress, playable: item.playable });
+        status: item.status, progress: item.progress, playable: item.playable, kind: item.kind ?? null, fileCount: item.fileCount ?? null });
     } catch (error) {
       // Persist uncertain acceptance instead of blindly replaying POST. Polling
       // recovers by the exact app folder; Cron can clean abandoned reservations.

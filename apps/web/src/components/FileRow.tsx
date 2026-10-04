@@ -1,12 +1,12 @@
 import { FileText, Film, Music, Image, FileArchive, FileSpreadsheet, Presentation } from "lucide-react";
 import type { FileEntry, FileKind, PublicDownload } from "@temporary-share/shared";
-import { fileKind } from "../../../../packages/shared/src/file-kind";
+import { downloadKind, formatProgress } from "../../../../packages/shared/src/file-kind";
 import { formatBytes } from "../lib/format";
 import { BrandIcon } from "./BrandIcon";
 
 import { kindLabels, statusLabels } from "../lib/file-labels";
 export function FileTile({ kind }: { kind: FileKind }) {
-  const icons = { video: Film, audio: Music, image: Image, archive: FileArchive, sheet: FileSpreadsheet, presentation: Presentation, pdf: FileText, text: FileText, other: FileText };
+  const icons = { video: Film, audio: Music, image: Image, archive: FileArchive, sheet: FileSpreadsheet, presentation: Presentation, pdf: FileText, text: FileText, subtitle: FileText, other: FileText };
   if (kind === "folder") return <span className="file-tile folder"><BrandIcon name="folder" variant="file" size={35}/></span>;
   const Icon = icons[kind];
   return <span className={`file-tile ${kind}`}><Icon size={25} strokeWidth={1.6}/>{["pdf", "archive", "sheet", "presentation"].includes(kind) && <small>{kind === "archive" ? "zip" : kind === "sheet" ? "xls" : kind === "presentation" ? "ppt" : kind}</small>}</span>;
@@ -15,13 +15,13 @@ export function FileRow({ file, entry, compact = false, onOpen, onMore, onDownlo
   file: PublicDownload; entry?: FileEntry; compact?: boolean; onOpen: () => void; onMore: () => void; onDownload: () => void;
 }) {
   const name = entry?.displayName ?? file.displayName;
-  const kind = entry?.kind ?? fileKind(name);
+  const kind = entry?.kind ?? downloadKind(file);
   const size = entry?.sizeBytes ?? file.sizeBytes;
   const ready = file.status === "ready";
   return <article className="file-row">
     <button className="file-open" onClick={onOpen} aria-label={`Open ${name}`}><FileTile kind={kind}/>
       <span className="file-meta"><strong title={name}>{name}</strong>
-        {!ready && !entry ? <><span className="meter mini"><span style={{ width: `${file.progress}%` }}/></span><small>{statusLabels[file.status]}{["downloading", "fetching_metadata"].includes(file.status) ? ` · ${file.progress}%` : ""}</small></> : <small>{formatBytes(size)} · {compact ? <em>Ready</em> : kindLabels[kind]}</small>}
+        {!ready && !entry ? <><span className="meter mini" role="progressbar" aria-label="Download progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={file.progress}><span style={{ width: `${file.progress}%` }}/></span><small>{statusLabels[file.status]}{["downloading", "fetching_metadata"].includes(file.status) ? ` · ${formatProgress(file.progress)}` : ""}</small></> : <small>{formatBytes(size)} · {compact ? <em>Ready</em> : kindLabels[kind]}{!compact && kind === "folder" && file.fileCount ? ` · ${file.fileCount} files` : ""}</small>}
       </span>
     </button>
     {!ready && !compact && <span className="row-size">{formatBytes(size)}</span>}

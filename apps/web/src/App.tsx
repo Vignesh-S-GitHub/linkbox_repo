@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronRight, RefreshCw } from "lucide-react";
 import type { ApiError, FileContents, FileEntry, PublicDownload } from "@temporary-share/shared";
-import { fileKind } from "../../../packages/shared/src/file-kind";
+import { downloadKind } from "../../../packages/shared/src/file-kind";
 import { Brand } from "./components/Brand";
 import { BrandIcon } from "./components/BrandIcon";
 import { MagnetForm } from "./components/MagnetForm";
@@ -65,12 +65,12 @@ function App() {
   const open = (file: PublicDownload, child?: FileEntry) => {
     if (file.deletedAt || Date.parse(file.expiresAt) <= Date.now()) { navigate("unavailable"); return; }
     if (file.status !== "ready") { navigate("progress", file.id); return; }
-    const kind = child?.kind ?? fileKind(file.displayName);
+    const kind = child?.kind ?? downloadKind(file);
     navigate(kind === "folder" ? "folder" : (child?.playable ?? file.playable) ? "player" : "preview", file.id, child?.id);
   };
   const download = async (file: PublicDownload, child?: FileEntry, newTab = false) => {
     setActions(null);
-    if (!child && fileKind(file.displayName) === "folder") { navigate("folder",file.id); return; }
+    if (!child && downloadKind(file) === "folder") { navigate("folder",file.id); return; }
     // Open synchronously for browsers which block popups after an async request.
     const target = newTab ? window.open("about:blank", "_blank") : null;
     if (target) target.opener = null;
@@ -86,7 +86,7 @@ function App() {
     }
   };
   const shareUrl = (file: PublicDownload, child?: FileEntry) => {
-    const kind = child?.kind ?? fileKind(file.displayName);
+    const kind = child?.kind ?? downloadKind(file);
     return new URL(routeUrl(kind === "folder" ? "folder" : (child?.playable ?? file.playable) ? "player" : "preview", file.id, child?.id), location.origin).href;
   };
   const share = async (file: PublicDownload, child?: FileEntry, copy = false) => {
@@ -140,7 +140,7 @@ function App() {
   else if (contentsError) page = <UnavailablePage onFiles={() => navigate("files")} message={contentsError}/>;
   else if (current && contents && isFolderView(route, contents.kind)) page = <FolderPage file={current} contents={contents} onOpen={child => open(current, child)} onMore={child => setActions({ file: current, entry: child })} onDownload={child => void download(current, child)}/>;
   else if (current && route.screen === "preview" && (entry?.preview === "guide" || (!route.entry && contents?.preview === "guide"))) page = <PreviewPage key={route.id + (route.entry ?? "")} file={current} entry={entry} onDownload={() => void download(current, entry)} onShare={() => void share(current, entry)} onOpenExternal={() => void download(current, entry, true)}/>;
-  else if (current && route.screen === "preview" && ["image","pdf"].includes(entry?.kind??fileKind(current.displayName))) page=<LivePreviewPage key={route.id+(route.entry??"")} file={current} entry={entry} onDownload={()=>void download(current,entry)}/>;
+  else if (current && route.screen === "preview" && ["image","pdf"].includes(entry?.kind??downloadKind(current))) page=<LivePreviewPage key={route.id+(route.entry??"")} file={current} entry={entry} onDownload={()=>void download(current,entry)}/>;
   else if (current && route.screen === "player" && (entry?.playable ?? current.playable)) page = <PlayerPage key={route.id + (route.entry ?? "")} file={current} entry={entry} onDownload={() => void download(current, entry)}/>;
   else page = <section className="unavailable"><BrandIcon name="file" size={70}/><h1>Preview not supported</h1><p>This file can still be downloaded.</p>{current && <button className="primary" onClick={() => void download(current, entry)}><BrandIcon name="download"/>Download</button>}</section>;
 

@@ -5,7 +5,7 @@ import { Brand } from "../components/Brand";
 import { BrandIcon } from "../components/BrandIcon";
 import { FileRow, FileTile } from "../components/FileRow";
 import { kindLabels } from "../lib/file-labels";
-import { fileKind } from "../../../../packages/shared/src/file-kind";
+import { downloadKind, formatProgress } from "../../../../packages/shared/src/file-kind";
 import { formatBytes } from "../lib/format";
 import { api } from "../lib/api";
 import { StreamMedia } from "../components/StreamMedia";
@@ -16,14 +16,14 @@ export function UnavailablePage({ onFiles, message }: { onFiles: () => void; mes
 export function ProgressPage({ file, onClose }: { file: PublicDownload; onClose: () => void }) {
   const steps = ["Added", "Fetching metadata", "Downloading", "Processing", "Ready"];
   const step = file.status === "ready" ? 4 : file.status === "processing" ? 3 : file.status === "downloading" ? 2 : 1;
-  return <div className="progress-page"><section className="card"><div className="folder-heading"><FileTile kind={fileKind(file.displayName)}/><div><strong>{file.displayName}</strong><small>{formatBytes(file.sizeBytes)}</small></div></div>
+  return <div className="progress-page"><section className="card"><div className="folder-heading"><FileTile kind={downloadKind(file)}/><div><strong>{file.displayName}</strong><small>{file.sizeBytes ? formatBytes(file.sizeBytes) : "Size pending metadata"}</small></div></div>
     <ol className="timeline">{steps.map((label, index) => <li key={label} className={index < step || file.status === "ready" ? "complete" : index === step ? "current" : "future"}>
       <span className="step-dot">{index < step || file.status === "ready" ? <BrandIcon name="check" size={15}/> : index === step ? <LoaderCircle size={23} className="spin"/> : null}</span>
-      <strong>{label}</strong><small>{index === 0 ? new Date(file.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : index < step ? "Completed" : index === step ? (file.status === "failed" ? "Download failed" : `${file.progress}% · ${formatBytes(file.sizeBytes * file.progress / 100)} / ${formatBytes(file.sizeBytes)}`) : ""}</small>
+      <strong>{label}</strong><small>{index === 0 ? new Date(file.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : index < step ? "Completed" : index === step ? (file.status === "failed" ? "Download failed" : `${formatProgress(file.progress)}${file.sizeBytes ? ` · ${formatBytes(file.sizeBytes * file.progress / 100)} / ${formatBytes(file.sizeBytes)}` : " · Waiting for file information"}`) : ""}</small>
       {index === step && file.status !== "failed" && <div className="meter"><span style={{ width: `${file.progress}%` }}/></div>}
     </li>)}</ol>
     {file.errorMessage && <p className="inline-error" role="alert">{file.errorMessage}</p>}
-  </section><button className={file.status === "ready" ? "primary full-width" : "cancel full-width"} onClick={onClose}>{file.status === "ready" ? "Go to files" : "Cancel"}</button>{file.status !== "ready" && <p className="progress-hint">Leaving this view keeps the shared download running.</p>}</div>;
+  </section><button className={file.status === "ready" ? "primary full-width" : "cancel full-width"} onClick={onClose}>{file.status === "ready" ? "Go to files" : "Back to files"}</button>{["queued", "fetching_metadata", "downloading", "processing"].includes(file.status) && <p className="progress-hint">Progress comes from Seedr and refreshes automatically. New torrents or few available peers can take longer. You can leave and return; the download keeps running.</p>}</div>;
 }
 export function FolderPage({ file, contents, onOpen, onMore, onDownload }: { file: PublicDownload; contents: FileContents; onOpen: (entry: FileEntry) => void; onMore: (entry: FileEntry) => void; onDownload: (entry: FileEntry) => void }) {
   const [search, setSearch] = useState("");
@@ -66,8 +66,8 @@ export function PlayerPage({ file, entry, onDownload }: { file: PublicDownload; 
     return () => { active = false; };
   }, [file.id, entry?.id]);
   const name = entry?.displayName ?? file.displayName;
-  return <section className="player-page"><div className="video-stage">{url ? <StreamMedia url={url} name={name} audio={(entry?.kind ?? fileKind(name)) === "audio"} onError={() => setError("The media could not be played in this browser. You can still download it.")}/> : error ? <div className="player-loading">Playback unavailable</div> : <div className="player-loading"><LoaderCircle className="spin"/>Loading playback…</div>}</div>
-    {error && <p className="inline-error" role="alert">{error}</p>}<div className="folder-heading"><FileTile kind={entry?.kind ?? fileKind(name)}/><div><strong>{name}</strong><small>{formatBytes(entry?.sizeBytes ?? file.sizeBytes)} · {kindLabels[entry?.kind ?? fileKind(name)]}</small></div></div><button className="primary full-width" onClick={onDownload}><BrandIcon name="download" size={18}/>Download</button>
+  return <section className="player-page">{url ? <StreamMedia key={`${file.id}:${entry?.id ?? ""}`} url={url} name={name} audio={(entry?.kind ?? downloadKind(file)) === "audio"} onError={() => setError("The media could not be played in this browser. You can still download it.")}/> : <div className="video-stage"><div className="player-loading">{error ? "Playback unavailable" : <><LoaderCircle className="spin"/>Loading playback…</>}</div></div>}
+    {error && <p className="inline-error" role="alert">{error}</p>}<div className="folder-heading"><FileTile kind={entry?.kind ?? downloadKind(file)}/><div><strong>{name}</strong><small>{formatBytes(entry?.sizeBytes ?? file.sizeBytes)} · {kindLabels[entry?.kind ?? downloadKind(file)]}</small></div></div><button className="primary full-width" onClick={onDownload}><BrandIcon name="download" size={18}/>Download</button>
   </section>;
 }
 export function FileLoading() { return <div className="file-list" aria-label="Loading files" role="status">{[1, 2, 3, 4].map(id => <div className="skeleton-row" key={id}><span/><div><i/><i/></div></div>)}<span className="sr-only">Loading files</span></div>; }
@@ -75,6 +75,6 @@ export function FileLoading() { return <div className="file-list" aria-label="Lo
 export function LivePreviewPage({ file, entry, onDownload }: { file: PublicDownload; entry?: FileEntry; onDownload:()=>void }) {
   const [url,setUrl]=useState(""); const [error,setError]=useState("");
   useEffect(()=>{let active=true;api.delivery(file.id,"download",entry?.id).then(value=>{if(active)setUrl(value.url);}).catch(()=>{if(active)setError("Preview unavailable. Try downloading this file.");});return()=>{active=false;};},[file.id,entry?.id]);
-  const name=entry?.displayName??file.displayName,kind=entry?.kind??fileKind(name);
+  const name=entry?.displayName??file.displayName,kind=entry?.kind??downloadKind(file);
   return <section className="preview-page"><div className="document-stage">{url ? kind==="image" ? <img src={url} alt={name} style={{maxWidth:"100%",maxHeight:"70vh",objectFit:"contain"}} onError={()=>setError("Preview unavailable. Try Download.")}/> : <object data={url} type="application/pdf" aria-label={name} style={{width:"100%",height:"65vh"}}><p>Open Download to view this PDF in your browser.</p></object> : <div className="player-loading">{error||"Loading preview…"}</div>}</div>{error&&<p className="inline-error" role="alert">{error}</p>}<button className="primary full-width" onClick={onDownload}><BrandIcon name="download"/>Download</button></section>;
 }
