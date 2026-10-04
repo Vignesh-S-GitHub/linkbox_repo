@@ -195,7 +195,7 @@ test("mock fixtures all exist in storage, deletion frees capacity, third account
 });
 
 const env = { SEEDR_MODE: "mock", ALLOWED_ORIGIN: "http://localhost:5173", SUBMISSION_COOLDOWN_SECONDS: "0" };
-const fetchApi = (path, init = {}) => worker.fetch(new Request(`http://localhost:8787${path}`, { ...init, headers: { origin: env.ALLOWED_ORIGIN, "content-type": "application/json", "x-session-id": "test-session", ...init.headers } }), env);
+const fetchApi = (path, init = {}) => worker.fetch(new Request(`http://localhost:8787${path}`, { ...init, headers: { origin: env.ALLOWED_ORIGIN, "content-type": "application/json", "x-session-id": "12345678-1234-4234-8234-123456789012", ...init.headers } }), env);
 const fixtureId = index => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
 
 const storageOnlyEnv = {
@@ -225,7 +225,7 @@ test("storage-only list is empty and every file mutation is blocked without exte
   try {
     globalThis.fetch = () => assert.fail("no Seedr file or database access allowed");
     assert.deepEqual(await (await fetchStorageOnly("/api/downloads")).json(), []);
-    for (const path of ["/api/downloads", `/api/downloads/${fixtureId(2)}/cleanup`]) {
+    for (const path of ["/api/downloads", `/api/downloads/${fixtureId(2)}/cleanup`, `/api/downloads/${fixtureId(2)}/delete`]) {
       const response = await fetchStorageOnly(path, { method: "POST" });
       assert.equal(response.status, 409); assert.equal((await response.json()).code, "storage_only");
     }
@@ -288,6 +288,33 @@ test("oversized and malformed JSON submissions get safe client errors", async ()
 });
 test("unapproved browser origins cannot mutate shared storage", async () => {
   assert.equal((await fetchApi(`/api/downloads/${fixtureId(3)}/cleanup`, { method: "POST", headers: { origin: "https://unapproved.example" } })).status, 403);
+});
+
+test("Worker immediate deletion is owner-only, private, confirmed by POST and idempotent",async()=>{
+ const owner="12345678-1234-4234-8234-123456789012",other="87654321-4321-4321-8321-210987654321";
+ const magnet=`magnet:?xt=urn:btih:${"c".repeat(40)}&dn=Wrong%20link%20test.zip&xl=1024`;
+ const created=await fetchApi("/api/downloads",{method:"POST",body:JSON.stringify({magnet})});assert.equal(created.status,201);
+ const file=await created.json();assert.equal(file.canDelete,true);
+ const raw=JSON.stringify(file);assert.ok(!raw.includes(owner));assert.ok(!raw.includes("ownerSessionHash"));
+ const endpoint=`/api/downloads/${file.id}/delete`;
+ assert.equal((await (await fetchApi(`/api/downloads/${file.id}`)).json()).canDelete,true);
+ assert.equal((await (await fetchApi(`/api/downloads/${file.id}`,{headers:{"x-session-id":other}})).json()).canDelete,false);
+ assert.equal((await fetchApi("/api/downloads",{method:"POST",headers:{"x-session-id":other},body:JSON.stringify({magnet})})).status,409);
+ assert.equal((await (await fetchApi(`/api/downloads/${file.id}`)).json()).canDelete,true);
+ assert.equal((await fetchApi(endpoint,{method:"POST",headers:{"x-session-id":other}})).status,403);
+ assert.equal((await fetchApi(endpoint,{method:"POST",headers:{"x-session-id":""}})).status,403);
+ assert.equal((await fetchApi(endpoint,{method:"GET"})).status,405);
+ assert.equal((await fetchApi(endpoint,{method:"POST",headers:{origin:"https://unapproved.example"}})).status,403);
+ assert.equal((await fetchApi(`/api/downloads/${file.id}/cleanup`,{method:"POST"})).status,409);
+ const deleted=await fetchApi(endpoint,{method:"POST"});assert.equal(deleted.status,200);assert.equal((await deleted.json()).status,"deleted");
+ assert.equal((await fetchApi(endpoint,{method:"POST"})).status,200);
+ assert.equal((await fetchApi(endpoint,{method:"POST",headers:{"x-session-id":other}})).status,403);
+ assert.equal((await fetchApi(`/api/downloads/${fixtureId(3)}/delete`,{method:"POST"})).status,403);
+});
+test("owner capability requires a private random UUID rather than an easily guessed session",async()=>{
+ const {requestOwnerHash}=require("./logic-test-build/apps/worker/src/utils/owner.js");
+ assert.equal(await requestOwnerHash(new Request("http://localhost",{headers:{"x-session-id":"test-session"}})),null);
+ const value=await requestOwnerHash(new Request("http://localhost",{headers:{"x-session-id":"12345678-1234-4234-8234-123456789012"}}));assert.match(value,/^[0-9a-f]{64}$/);
 });
 
 (async () => { for (const [name, fn] of tests) { await fn(); console.log(`✓ ${name}`); } console.log(`${tests.length} logic tests passed`); })().catch((error) => { console.error(error); process.exitCode = 1; });

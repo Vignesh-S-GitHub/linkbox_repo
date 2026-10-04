@@ -191,6 +191,14 @@ Task/folder mapping, temporary delivery and ownership-scoped deletion were verif
 
 ### Verified API and limitations
 
+#### Delete a mistakenly added magnet
+
+For newly submitted downloads, open the file's menu (⋮) and choose **Delete my download**, or use that option on its progress page. Confirming stops the task and deletes the entire LinkBox-managed download, including its folder contents and shared access. This is permanent, not an undo/trash feature.
+
+Only the originating browser can use `POST /api/downloads/:id/delete`, including within the first three hours. A random browser UUID is a private bearer capability; D1 stores only its SHA-256 digest (`0004_download_owner.sql`). Responses include a request-specific `canDelete` boolean, never the UUID or digest. Do not share this browser session value. Clearing browser storage, switching browsers/devices, or losing that value loses immediate-delete authority. Historical records have no trustworthy owner and are deliberately not claimed retroactively; they retain normal community cleanup and expiration.
+
+The Worker verifies ownership and atomically claims deletion in D1. Repeated owner requests are idempotent, competing requests do not double-delete, failed provider deletion remains retryable, and deletion is blocked while a submission is still being admitted/checkpointed. Other browsers still cannot delete protected files before three hours. No login, paid service, new Seedr endpoint, or account-wide deletion is introduced.
+
 - API Console's **endpoint form** documents `POST /tasks` JSON fields `torrent_magnet` and `folder_id`. Its generic code example uses obsolete `url` / `save_folder_id`; those returned HTTP 422 and are not used.
 - `POST /fs/folder` uses `name` / `parent_id`. The task's `folder_id` must match the isolated parent; completed content is traversed only beneath that parent. IDs are not interchangeable.
 - `GET /download/file/{id}/url` returns a temporary URL. Documented `GET /presentation/fs/item/{id}/video/url` returns HLS; browser playback lazy-loads the **full HLS.js build**, including alternate audio and subtitles, with native play/pause/seek controls. The previous light build omitted separate audio renditions; Sintel's real stream has one and requires the full build. No media proxy is used. Modern `/presentations/file/{id}/video` returned HTTP 400 in the test, so the working documented compatibility endpoint is used.

@@ -15,6 +15,8 @@ export interface PublicDownload {
   /** Provider-confirmed type; absent while metadata is pending or on older APIs. */
   kind?: FileKind | null;
   fileCount?: number | null;
+  /** Request-specific permission; never an owner ID or session capability. */
+  canDelete?: boolean;
 }
 
 export type FileKind = "folder" | "video" | "audio" | "image" | "pdf" | "archive" | "text" | "subtitle" | "sheet" | "presentation" | "other";

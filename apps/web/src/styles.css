@@ -239,6 +239,8 @@ input[type="radio"],input[type="checkbox"] { accent-color:var(--lb-primary); wid
 .player-loading { height:360px; display:flex; justify-content:center; align-items:center; gap:10px; color:#B6CAE7; font-size:12px; }
 .player-page .folder-heading { padding:20px 0; }
 .video-stage audio { display:block; width:100%; padding:22px 10px; }
+.delete-confirm { background:#c83d3d; margin:18px 0 10px; }
+.delete-confirm:hover { background:#b53131; }
 .unavailable { min-height:430px; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; gap:18px; max-width:330px; margin:30px auto; }
 .unavailable h1 { font-size:19px; }
 .unavailable p { color:var(--lb-muted); font-size:13px; line-height:1.8; max-width:240px; }

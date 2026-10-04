@@ -13,7 +13,7 @@ import { StreamMedia } from "../components/StreamMedia";
 export function UnavailablePage({ onFiles, message }: { onFiles: () => void; message?: string }) {
   return <section className="unavailable"><div className="missing-art"><FileTile kind="text"/><span><X size={20}/></span></div><h1>File unavailable</h1><p>{message ?? "This file is no longer available in LinkBox."}</p><button className="primary" onClick={onFiles}>Go to files</button></section>;
 }
-export function ProgressPage({ file, onClose }: { file: PublicDownload; onClose: () => void }) {
+export function ProgressPage({ file, onClose, onDelete }: { file: PublicDownload; onClose: () => void; onDelete:()=>void }) {
   const steps = ["Added", "Fetching metadata", "Downloading", "Processing", "Ready"];
   const step = file.status === "ready" ? 4 : file.status === "processing" ? 3 : file.status === "downloading" ? 2 : 1;
   return <div className="progress-page"><section className="card"><div className="folder-heading"><FileTile kind={downloadKind(file)}/><div><strong>{file.displayName}</strong><small>{file.sizeBytes ? formatBytes(file.sizeBytes) : "Size pending metadata"}</small></div></div>
@@ -23,7 +23,7 @@ export function ProgressPage({ file, onClose }: { file: PublicDownload; onClose:
       {index === step && file.status !== "failed" && <div className="meter"><span style={{ width: `${file.progress}%` }}/></div>}
     </li>)}</ol>
     {file.errorMessage && <p className="inline-error" role="alert">{file.errorMessage}</p>}
-  </section><button className={file.status === "ready" ? "primary full-width" : "cancel full-width"} onClick={onClose}>{file.status === "ready" ? "Go to files" : "Back to files"}</button>{["queued", "fetching_metadata", "downloading", "processing"].includes(file.status) && <p className="progress-hint">Progress comes from Seedr and refreshes automatically. New torrents or few available peers can take longer. You can leave and return; the download keeps running.</p>}</div>;
+  </section><button className={file.status === "ready" ? "primary full-width" : "cancel full-width"} onClick={onClose}>{file.status === "ready" ? "Go to files" : "Back to files"}</button>{file.canDelete&&<button className="unavailable-action full-width" disabled={file.status==="deleting"} onClick={onDelete}>Delete my download</button>}{["queued", "fetching_metadata", "downloading", "processing"].includes(file.status) && <p className="progress-hint">Progress comes from Seedr and refreshes automatically. New torrents or few available peers can take longer. You can leave and return; the download keeps running.</p>}</div>;
 }
 export function FolderPage({ file, contents, onOpen, onMore, onDownload }: { file: PublicDownload; contents: FileContents; onOpen: (entry: FileEntry) => void; onMore: (entry: FileEntry) => void; onDownload: (entry: FileEntry) => void }) {
   const [search, setSearch] = useState("");

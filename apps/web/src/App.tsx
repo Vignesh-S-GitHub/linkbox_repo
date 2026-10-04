@@ -9,6 +9,7 @@ import { FileRow } from "./components/FileRow";
 import { EmptyState } from "./components/EmptyState";
 import { StorageCard } from "./components/StorageCard";
 import { ActionsSheet } from "./components/ActionsSheet";
+import { DeleteDownloadSheet } from "./components/DeleteDownloadSheet";
 import { AboutPage, SettingsPage } from "./pages/InfoPages";
 import { FileLoading, FolderPage, PlayerPage, PreviewPage, ProgressPage, UnavailablePage, LivePreviewPage } from "./pages/FilePages";
 import { StorageFullPage } from "./pages/StorageFullPage";
@@ -26,6 +27,8 @@ function App() {
   const { route, go } = useNavigation();
   const [filter, setFilter] = useState<"all" | "downloading" | "ready">("all");
   const [actions, setActions] = useState<Selection | null>(null);
+  const [deleteTarget,setDeleteTarget]=useState<PublicDownload|null>(null);
+  const [deleteBusy,setDeleteBusy]=useState(false),[deleteError,setDeleteError]=useState("");
   const [storageFull, setStorageFull] = useState<ApiError | null>(null);
   const [pendingMagnet, setPendingMagnet] = useState("");
   const [busy, setBusy] = useState(false);
@@ -62,6 +65,17 @@ function App() {
   const visible = filter === "all" ? activeFiles : filter === "ready" ? ready : downloading;
   const navigate = (screen: Screen, id?: string, entryId?: string, section?: string) => { setActions(null); go(screen, id, entryId, section); };
   const add = (file: PublicDownload) => { setDownloads(items => [file, ...items]); navigate("progress", file.id); void refresh(); };
+  const requestDelete=(file:PublicDownload)=>{setActions(null);setDeleteError("");setDeleteTarget(file);};
+  const deleteOwn=async()=>{
+    if(!deleteTarget||deleteBusy)return;
+    setDeleteBusy(true);setDeleteError("");
+    try{
+      await api.deleteOwn(deleteTarget.id);
+      setDownloads(items=>items.filter(file=>file.id!==deleteTarget.id));
+      setDeleteTarget(null);navigate("files");setNotice("Your download was deleted.");await refresh();
+    }catch(cause){setDeleteError((cause as ApiError).error??"Deletion could not finish. Please retry.");}
+    finally{setDeleteBusy(false);}
+  };
   const open = (file: PublicDownload, child?: FileEntry) => {
     if (file.deletedAt || Date.parse(file.expiresAt) <= Date.now()) { navigate("unavailable"); return; }
     if (file.status !== "ready") { navigate("progress", file.id); return; }
@@ -134,8 +148,8 @@ function App() {
   else if (route.screen === "storage-full") page = storageFull ? <StorageFullPage error={storageFull} busy={busy} onContinue={ids => void freeAndContinue(ids)} onCancel={() => navigate("home")}/> : <UnavailablePage onFiles={() => navigate("files")} message="No pending download needs storage cleanup."/>;
   else if (fileScreen && loading) page = <FileLoading/>;
   else if (missing || route.screen === "unavailable") page = <UnavailablePage onFiles={() => navigate("files")}/>;
-  else if (current && route.screen === "progress") page = <ProgressPage file={current} onClose={() => navigate("files")}/>;
-  else if (current && current.status !== "ready" && fileScreen) page = <ProgressPage file={current} onClose={() => navigate("files")}/>;
+  else if (current && route.screen === "progress") page = <ProgressPage file={current} onClose={() => navigate("files")} onDelete={()=>requestDelete(current)}/>;
+  else if (current && current.status !== "ready" && fileScreen) page = <ProgressPage file={current} onClose={() => navigate("files")} onDelete={()=>requestDelete(current)}/>;
   else if (contentsLoading || (needsContents && !contents && !contentsError)) page = <FileLoading/>;
   else if (contentsError) page = <UnavailablePage onFiles={() => navigate("files")} message={contentsError}/>;
   else if (current && contents && isFolderView(route, contents.kind)) page = <FolderPage file={current} contents={contents} onOpen={child => open(current, child)} onMore={child => setActions({ file: current, entry: child })} onDownload={child => void download(current, child)}/>;
@@ -153,7 +167,8 @@ function App() {
     </div></header>
     <div className="page-content">{error && <div className="connection-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => void refresh()}><RefreshCw size={15}/>Retry</button></div>}{page}</div>
     {rootScreen && <><button className="floating-add" onClick={() => { navigate("home"); window.setTimeout(() => document.getElementById("magnet")?.focus(), 0); }} aria-label="Add a link"><BrandIcon name="add" size={28}/></button><nav className="bottom-nav" aria-label="Bottom navigation"><button className="active" aria-current={route.screen === "files" ? "page" : undefined} onClick={() => navigate("files")}><BrandIcon name="folder" size={29}/>Files</button><button onClick={() => navigate("storage")}><BrandIcon name="storage" size={29}/>Storage</button></nav></>}
-    {actions && <ActionsSheet key={actions.file.id + (actions.entry?.id ?? "")} file={actions.file} entry={actions.entry} onClose={() => setActions(null)} onOpen={() => open(actions.file, actions.entry)} onDownload={() => void download(actions.file, actions.entry)} onShare={() => void share(actions.file, actions.entry)} onCopy={() => void share(actions.file, actions.entry, true)} onUnavailable={() => navigate("unavailable")}/>}
+    {actions && <ActionsSheet key={actions.file.id + (actions.entry?.id ?? "")} file={actions.file} entry={actions.entry} onClose={() => setActions(null)} onOpen={() => open(actions.file, actions.entry)} onDownload={() => void download(actions.file, actions.entry)} onShare={() => void share(actions.file, actions.entry)} onCopy={() => void share(actions.file, actions.entry, true)} onUnavailable={() => navigate("unavailable")} onDelete={()=>requestDelete(actions.file)}/>}
+    {deleteTarget&&<DeleteDownloadSheet file={deleteTarget} busy={deleteBusy} error={deleteError} onClose={()=>setDeleteTarget(null)} onConfirm={()=>void deleteOwn()}/>}
     {notice && <div className="toast" role="status">{notice}<button onClick={() => setNotice("")} aria-label="Dismiss">×</button></div>}
   </main>;
 }

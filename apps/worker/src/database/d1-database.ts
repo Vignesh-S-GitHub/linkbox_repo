@@ -9,9 +9,10 @@ type StoredRow = {
   cleanup_allowed_at: string; expires_at: string; deleted_at: string | null;
   error_message: string | null; cleanup_claimed_at: string | null; playable: number;
   kind: DownloadRow["kind"]; file_count: number | null;
+  owner_session_hash: string | null;
 };
 
-const columns = "id, public_id, seedr_account_id, seedr_item_id, magnet_hash, display_name, size_bytes, status, progress, created_at, cleanup_allowed_at, expires_at, deleted_at, error_message, cleanup_claimed_at, playable, kind, file_count";
+const columns = "id, public_id, seedr_account_id, seedr_item_id, magnet_hash, display_name, size_bytes, status, progress, created_at, cleanup_allowed_at, expires_at, deleted_at, error_message, cleanup_claimed_at, playable, kind, file_count, owner_session_hash";
 const mapRow = (row: StoredRow): DownloadRow => ({
   id: row.id, publicId: row.public_id, seedrAccountId: row.seedr_account_id,
   seedrItemId: row.seedr_item_id, magnetHash: row.magnet_hash, displayName: row.display_name,
@@ -19,7 +20,7 @@ const mapRow = (row: StoredRow): DownloadRow => ({
   cleanupAllowedAt: row.cleanup_allowed_at, expiresAt: row.expires_at,
   deletedAt: row.deleted_at, errorMessage: row.error_message,
   cleanupClaimedAt: row.cleanup_claimed_at, playable: row.playable === 1,
-  kind: row.kind, fileCount: row.file_count,
+  kind: row.kind, fileCount: row.file_count, ownerSessionHash: row.owner_session_hash,
 });
 
 /** Worker-bound D1 only. No browser database credentials or media payloads. */
@@ -98,11 +99,11 @@ export class D1MetadataDatabase implements Database {
     return this.query(async () => {
       try {
         const result = await this.db.prepare(`INSERT INTO downloads (${columns}, updated_at)
-          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
+          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
           RETURNING ${columns}`).bind(row.id, row.publicId, row.seedrAccountId, row.seedrItemId,
           row.magnetHash, row.displayName, row.sizeBytes, row.status, row.progress,
           row.createdAt, row.cleanupAllowedAt, row.expiresAt, row.deletedAt,
-          row.errorMessage, row.cleanupClaimedAt, Number(row.playable), row.kind ?? null, row.fileCount ?? null, new Date().toISOString())
+          row.errorMessage, row.cleanupClaimedAt, Number(row.playable), row.kind ?? null, row.fileCount ?? null, row.ownerSessionHash ?? null, new Date().toISOString())
           .first<StoredRow>();
         if (!result) throw new Error("Insert did not return a record");
         return mapRow(result);
@@ -134,13 +135,14 @@ export class D1MetadataDatabase implements Database {
     throw new ApiProblem(404, "not_found", "This download does not exist.");
   }
 
-  async claimForCleanup(publicId: string, now: string): Promise<DownloadRow | null> {
+  async claimForCleanup(publicId: string, now: string, ownerSessionHash?: string): Promise<DownloadRow | null> {
     // One conditional statement, not SELECT then UPDATE: atomic across all Workers.
     const row = await this.query(() => this.db.prepare(`UPDATE downloads
       SET status='deleting', cleanup_claimed_at=?1, updated_at=?1
       WHERE public_id=?2 AND deleted_at IS NULL
-        AND (cleanup_claimed_at IS NULL OR cleanup_claimed_at<=?3) AND cleanup_allowed_at<=?1
-      RETURNING ${columns}`).bind(now, publicId, new Date(Date.parse(now)-300000).toISOString()).first<StoredRow>());
+        AND (cleanup_claimed_at IS NULL OR cleanup_claimed_at<=?3)
+        AND ((?4 IS NULL AND cleanup_allowed_at<=?1) OR (?4 IS NOT NULL AND owner_session_hash=?4))
+      RETURNING ${columns}`).bind(now, publicId, new Date(Date.parse(now)-300000).toISOString(), ownerSessionHash ?? null).first<StoredRow>());
     return row ? mapRow(row) : null;
   }
 
