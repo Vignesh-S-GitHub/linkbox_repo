@@ -19,7 +19,15 @@ export class MockSeedrAdapter implements SeedrAdapter {
         progress: row.progress, playable: row.playable, kind: row.kind, fileCount: row.fileCount, startedAt: Date.now(), initialProgress: row.progress });
     }
   }
-  async syncAccounts() { this.tick(); return structuredClone(this.accounts); }
+  configureAccounts(config: AccountConfig[]) {
+    const updated = config.map(account => {
+      const usedBytes = this.accounts.find(value => value.id === account.id)?.usedBytes ?? 0;
+      return {...account,usedBytes,availableBytes:Math.max(0,account.capacityBytes-usedBytes),lastSyncedAt:new Date().toISOString()};
+    });
+    this.accounts.splice(0,this.accounts.length,...updated);
+  }
+  async verifyAccount() { return {capacityBytes:5*1024**3,usedBytes:0,availableBytes:5*1024**3}; }
+  async syncAccounts() { this.tick(); return structuredClone(this.accounts.filter(account=>account.enabled)); }
   async inspectMagnet(magnet: string) {
     const url = new URL(magnet);
     const rawSize = url.searchParams.get("xl");
@@ -29,7 +37,7 @@ export class MockSeedrAdapter implements SeedrAdapter {
   async addMagnet(accountId: string, magnet: string) {
     const info = await this.inspectMagnet(magnet);
     const account = this.accounts.find(value => value.id === accountId);
-    if (!account || !info.sizeBytes || account.availableBytes < info.sizeBytes) throw new Error("Not enough space");
+    if (!account?.enabled || !info.sizeBytes || account.availableBytes < info.sizeBytes) throw new Error("Not enough space");
     const item: MockItem = { ...info, itemId: `mock-${crypto.randomUUID()}`, accountId,
       status: "fetching_metadata", progress: 0, initialProgress: 0, startedAt: Date.now(),
       playable: ["video", "audio"].includes(fileKind(info.displayName)), kind: fileKind(info.displayName) };

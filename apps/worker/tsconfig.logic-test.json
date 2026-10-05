@@ -20,6 +20,7 @@
     "src/cleanup/cleanup-service.ts",
     "src/types.ts",
     "src/index.ts",
-    "../web/src/lib/routes.ts"
+    "../web/src/lib/routes.ts",
+    "../web/src/lib/download-link.ts"
   ]
 }

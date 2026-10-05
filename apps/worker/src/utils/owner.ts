@@ -9,8 +9,13 @@ export async function requestOwnerHash(request: Request): Promise<string | null>
 }
 export function ownsDownload(row: DownloadRow, hash: string | null): boolean {
   if (!hash || !row.ownerSessionHash) return false;
+  return equalDigests(hash,row.ownerSessionHash);
+}
+/** Compare fixed-length SHA-256 values, including admin key verifiers. */
+export function equalDigests(hash: string, expected: string): boolean {
+  if (!/^[0-9a-f]{64}$/.test(hash) || !/^[0-9a-f]{64}$/.test(expected)) return false;
   const bytes = (value: string) => Uint8Array.from(value.match(/.{2}/g) ?? [], part => parseInt(part, 16));
-  const provided = bytes(hash), stored = bytes(row.ownerSessionHash);
+  const provided = bytes(hash), stored = bytes(expected);
   if (provided.length !== 32 || stored.length !== 32) return false;
   if ("timingSafeEqual" in crypto.subtle && typeof crypto.subtle.timingSafeEqual === "function") return crypto.subtle.timingSafeEqual(provided, stored) === true;
   // Node's test runtime lacks the Worker extension. Compare every digest byte.

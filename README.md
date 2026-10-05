@@ -181,9 +181,36 @@ Use mock mode for safe synthetic cleanup tests. In current Wrangler, you can als
 
 ## Adding another Seedr account
 
-Append an enabled object to `SEEDR_ACCOUNT_CONFIG` with an internal ID, label, actual capacity and a distinct `secretKeyReference`. Store that token with `wrangler secret put`. D1 upserts metadata during storage refresh; no seed migration or selection rewrite is necessary. Removed accounts retain metadata history but are disabled when remaining accounts sync.
+**Settings → Accounts is a private owner-only section.** Public visitors see no account list, names, identifiers or tokens. Unlocking requires a separate private admin key; your Seedr PAT is never entered in the website.
+
+First, apply the metadata migration and configure owner access from your local repository:
+
+```powershell
+cd C:\Users\shanm\Projects\LinkBox
+npm run db:migrate:remote
+npm run admin:setup:production
+```
+
+The helper prompts with hidden input. Choose a unique random 32–128 character key from your password manager (letters, numbers, `.`, `_`, `~`, `-`), save it securely, and never send it in chat. It uploads only its SHA-256 digest as the Worker Secret `LINKBOX_ADMIN_KEY_SHA256`. The raw key is never saved locally or passed on the command line. Use HTTPS for deployed admin access. The browser keeps the key in memory only; leaving Accounts, hiding the tab, pressing Lock, or 10 minutes of inactivity locks it. No persistent admin login is created. Reset/rotate it by running the helper again. Other browsers and unauthorized requests cannot manage accounts.
+
+To connect a **different** Seedr account:
+
+```powershell
+cd C:\Users\shanm\Projects\LinkBox\apps\worker
+npx wrangler secret put SEEDR_ACCOUNT_B_TOKEN --env production
+```
+
+Paste the PAT only into Wrangler's private prompt, not Settings, source code or a terminal command argument. It needs the same documented scopes as the first account. Then open Settings → Accounts, unlock, enter a label and **secret name** `SEEDR_ACCOUNT_B_TOKEN`, confirm it belongs to a different account, and choose **Verify & connect account**. The Worker reads the verified official quota endpoint and saves actual capacity. The public storage total automatically includes enabled accounts; a single file still must fit wholly on one account. Use unique secret names for accounts C/D/etc.
+
+Only metadata (label, enabled flag, actual capacity and secret reference) is stored in D1's `account_configuration` table. Credentials remain in Worker Secrets. The existing Wrangler account is the baseline; D1 overrides its enabled flag and adds accounts. Redeploying does not discard these additions. Changes serialize with submissions/deletions using the existing D1 lease. Identical tokens under different secret names are rejected; the verified quota response does **not** identify an account, so two different tokens for the same account cannot be detected automatically. The distinct-account confirmation is required to avoid double-counting. Do not register another PAT for an existing account.
+
+**Accept new downloads** disables admissions only. Existing downloads remain playable/downloadable, owner-deletable and eligible for 24-hour Cron expiry. Keep disabled accounts' secrets until all their files expire; do not delete/rename those bindings. At least one account must stay enabled. Refresh performs at most one quota request per enabled account and is throttled to 15 seconds; ordinary public storage remains cached for 60 seconds. Account removal/token editing in the browser is deliberately not supported.
+
+For local owner testing, run `npm run admin:setup`, add the additional PAT privately to ignored `apps/worker/.dev.vars` under the matching secret name, and restart the Worker. Local D1 and production D1 are separate: connecting an account locally does not connect it in production. Mock mode uses simulated quota and files, never requests Seedr, and resets metadata on restart; synthetic secret values can be used for mock account tests.
 
 Full mode handles up to 8 configured accounts without rewriting selection logic. IDs and token references must be distinct, and capacities must be positive whole byte counts. Keep disabled accounts and their credentials configured until their old records are cleaned; removing an account or token immediately prevents cleanup of those records. No individual download spans accounts.
+
+Without `LINKBOX_ADMIN_KEY_SHA256`, the Accounts page stays locked with a setup message; ordinary file functionality is unchanged. Failed key attempts are throttled per hashed IP for 15 seconds. Admin mutations require the exact allowed origin and a valid Bearer key. Account responses are whitelist-only and never include the hash or PAT. Use a high-entropy key, not an ordinary password; SHA-256 is appropriate here for random access keys, not low-entropy password storage.
 
 ## Switching mock → full live
 
@@ -195,7 +222,13 @@ Task/folder mapping, temporary delivery and ownership-scoped deletion were verif
 
 #### Delete a mistakenly added magnet
 
-For newly submitted downloads, open the file's menu (⋮) and choose **Delete my download**, or use that option on its progress page. Confirming stops the task and deletes the entire LinkBox-managed download, including its folder contents and shared access. This is permanent, not an undo/trash feature.
+For newly submitted downloads, open the file's menu (⋮) and choose the single red **Delete** action, or use that option on its progress page. Confirming stops the task and deletes the entire LinkBox-managed download, including its folder contents and shared access. This is permanent, not an undo/trash feature. There is no “Not available” menu action; unavailable files still have a real error page.
+
+### Original-quality external playback
+
+For a ready individual file, open its menu (⋮) and choose **Copy download link**. For a folder, open it first and use the video file's menu. Paste the copied URL into your external player's network-stream field; in VLC desktop use **Media → Open Network Stream → paste → Play** ([official VLC instructions](https://docs.videolan.me/vlc-user/desktop/3.0/en/basic/media.html)). This is the original-file delivery URL, not the lower-resolution HLS preview or a Seedr API/PAT authentication URL. The existing Worker download endpoint checks membership, readiness and expiry before issuing it; media remains direct from Seedr.
+
+Original resolution/audio tracks depend on the source file and your external player's codec support and connection. Copying a URL does not upscale or transcode it. Links are temporary bearer capabilities: keep them private, copy a fresh one if Seedr expires it, and download before the 24-hour deadline. **Share** still shares the LinkBox page, not this direct file URL. Clipboard failures show a safe inline error; URLs are never logged or saved to browser storage. Folder-wide archive links are not invented.
 
 Only the originating browser can use `POST /api/downloads/:id/delete`, at any time without an age lock. A random browser UUID is a private bearer capability; D1 stores only its SHA-256 digest (`0004_download_owner.sql`). Responses include a request-specific `canDelete` boolean, never the UUID or digest. Do not share this browser session value. Clearing browser storage, switching browsers/devices, or losing that value loses manual-delete authority. Historical records have no trustworthy owner and are deliberately not claimed retroactively; automatic expiration still applies.
 

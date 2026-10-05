@@ -266,6 +266,25 @@ input[type="radio"],input[type="checkbox"] { accent-color:var(--lb-primary); wid
 .skeleton-row>span { width:42px; height:45px; border-radius:7px; background:var(--lb-border); }
 .skeleton-row>div { flex:1; padding:4px 0; }.skeleton-row i { display:block; height:9px; background:var(--lb-border); border-radius:5px; width:67%; margin-bottom:12px; }.skeleton-row i+ i { width:38%; }
 .spin { animation:spin 1.1s linear infinite; }@keyframes spin { to { transform:rotate(360deg); } }
+.accounts-page { max-width:540px; margin:auto; display:grid; gap:18px; }
+.accounts-page p { font-size:12px; color:var(--lb-muted); line-height:1.7; margin:10px 0; }
+.accounts-page form { display:grid; gap:16px; margin-top:20px; }
+.accounts-page form>label:not(.account-toggle) { display:grid; gap:8px; font-size:12px; }
+.accounts-page input:not([type=checkbox]) { width:100%; min-width:0; min-height:48px; padding:12px; border:1px solid var(--lb-border); border-radius:10px; background:var(--lb-surface); color:var(--lb-text); }
+.accounts-page details { margin:16px 0; font-size:12px; color:var(--lb-muted); }
+.accounts-page summary { cursor:pointer; min-height:44px; display:flex; align-items:center; color:var(--lb-primary); }
+.accounts-page code { font-size:11px; overflow-wrap:anywhere; }
+.account-command { display:block; background:var(--lb-primary-soft); border-radius:8px; padding:12px; }
+.admin-unlock>h2 { margin-top:16px; }
+.account-heading { display:flex; align-items:center; gap:12px; }
+.account-heading>div { flex:1; min-width:0; overflow-wrap:anywhere; }
+.account-heading p { margin:4px 0 0; }
+.account-list { display:grid; gap:14px; }
+.accounts-page .account-quota { margin-top:20px; }
+.account-quota strong { color:var(--lb-text); font-size:19px; }
+.account-toggle { display:flex; align-items:center; gap:12px; min-height:48px; font-size:12px; line-height:1.6; cursor:pointer; margin-top:8px; }
+.account-toggle input { width:20px; height:20px; flex-shrink:0; accent-color:var(--lb-primary); }
+.account-hint { background:var(--lb-primary-soft); border-radius:10px; padding:12px; }
 @media(max-width:600px) {
   :root { background:var(--lb-page-wash); }
   .app-shell { margin:0; border:0; border-radius:0; box-shadow:none; min-height:100dvh; }

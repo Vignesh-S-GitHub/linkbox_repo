@@ -7,7 +7,7 @@ export function DeleteDownloadSheet({file,busy,error,onClose,onConfirm}:{file:Pu
   <h2>Delete this download?</h2><p className="sheet-file-name">{file.displayName}</p>
   <p className="sheet-note">Added the wrong magnet? This stops the download and permanently removes the whole download and all its files from Seedr. Shared links will stop working for everyone. This cannot be undone.</p>
   {error&&<p className="inline-error" role="alert">{error}</p>}
-  <button className="primary full-width delete-confirm" disabled={busy} onClick={onConfirm}><Trash2 size={18}/>{busy?"Deleting…":"Delete my download"}</button>
+  <button className="primary full-width delete-confirm" disabled={busy} onClick={onConfirm}><Trash2 size={18}/>{busy?"Deleting…":"Delete"}</button>
   <button className="cancel full-width" disabled={busy} onClick={onClose}>Keep download</button>
  </Sheet>;
 }

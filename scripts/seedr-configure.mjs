@@ -59,7 +59,7 @@ async function main() {
     console.log("Configured one real Seedr account for LinkBox V1 live operations.");
     console.log("Token saved only in ignored apps/worker/.dev.vars. Do not share that file.");
     console.log("Capacity and usage will come from your actual Seedr quota, not the demo pool.");
-    console.log("Setup changed no Seedr files. The running app can add and deliver app-managed files; eligible cleanup and Cron can delete them.");
+    console.log("Setup changed no Seedr files. The running app can add and deliver app-managed files; owner deletion and 24-hour Cron expiry can delete them.");
     console.log("Restart npm run dev, then refresh the website and open Storage.");
   } catch (error) {
     console.error(error instanceof Error ? error.message : "Seedr configuration failed.");

@@ -11,16 +11,18 @@ import { StorageCard } from "./components/StorageCard";
 import { ActionsSheet } from "./components/ActionsSheet";
 import { DeleteDownloadSheet } from "./components/DeleteDownloadSheet";
 import { AboutPage, SettingsPage } from "./pages/InfoPages";
+import { AccountsPage } from "./pages/AccountsPage";
 import { FileLoading, FolderPage, PlayerPage, PreviewPage, ProgressPage, UnavailablePage, LivePreviewPage } from "./pages/FilePages";
 import { StorageFullPage } from "./pages/StorageFullPage";
 import { useDownloads } from "./hooks/useDownloads";
 import { useNavigation } from "./hooks/useNavigation";
 import { api } from "./lib/api";
 import { formatBytes } from "./lib/format";
+import { copyDownloadLink } from "./lib/download-link";
 import { routeUrl, isFolderView, type Screen } from "./lib/routes";
 
 type Selection = { file: PublicDownload; entry?: FileEntry };
-const pageTitles: Partial<Record<Screen, string>> = { progress: "Add Link", storage: "Storage", "storage-full": "Storage full", settings: "Settings", about: "About LinkBox" };
+const pageTitles: Partial<Record<Screen, string>> = { progress: "Add Link", storage: "Storage", "storage-full": "Storage full", settings: "Settings", accounts:"Accounts", about: "About LinkBox" };
 
 function App() {
   const { downloads, storage, loading, error, refresh, setDownloads } = useDownloads();
@@ -101,10 +103,15 @@ function App() {
     const kind = child?.kind ?? downloadKind(file);
     return new URL(routeUrl(kind === "folder" ? "folder" : (child?.playable ?? file.playable) ? "player" : "preview", file.id, child?.id), location.origin).href;
   };
-  const share = async (file: PublicDownload, child?: FileEntry, copy = false) => {
+  const copyDirectLink = async (file: PublicDownload, child?: FileEntry) => {
+    await copyDownloadLink(() => api.delivery(file.id, "download", child?.id).then(result => result.url));
+    setActions(null);
+    setNotice("Download link copied. Paste it into your external player. Temporary link — keep it private.");
+  };
+  const share = async (file: PublicDownload, child?: FileEntry) => {
     try {
       const url = shareUrl(file, child);
-      if (!copy && navigator.share) await navigator.share({ title: child?.displayName ?? file.displayName, url });
+      if (navigator.share) await navigator.share({ title: child?.displayName ?? file.displayName, url });
       else { await navigator.clipboard.writeText(url); setNotice("Link copied"); }
       setActions(null);
     } catch (cause) { if (!(cause instanceof DOMException && cause.name === "AbortError")) setNotice("Sharing is unavailable. Copy the page address from your browser."); }
@@ -126,6 +133,7 @@ function App() {
   </>;
   else if (route.screen === "storage") page = <section className="storage-page"><StorageCard storage={storage} onRefresh={() => void refresh()}/><div className="storage-stats">{([["Total Storage", storage?.capacityBytes], ["Used Storage", storage?.usedBytes], ["Available", storage?.availableBytes]] as const).map(([label, bytes]) => <div key={label}><BrandIcon name="storage" size={17}/><span>{label}</span><strong>{bytes === undefined ? "—" : formatBytes(bytes)}</strong></div>)}</div><div className="storage-counts"><p><BrandIcon name="add" size={17}/><span>Active downloads</span><strong>{downloading.length}</strong></p><p><BrandIcon name="check" size={17}/><span>Ready files</span><strong>{ready.length}</strong></p></div></section>;
   else if (route.screen === "settings") page = <SettingsPage go={navigate}/>;
+  else if (route.screen === "accounts") page = <AccountsPage onChanged={()=>void refresh()}/>;
   else if (route.screen === "about") page = <AboutPage section={route.section}/>;
   else if (route.screen === "storage-full") page = storageFull ? <StorageFullPage error={storageFull} onFiles={() => navigate("files")} onCancel={() => navigate("home")}/> : <UnavailablePage onFiles={() => navigate("files")} message="No pending storage request."/>;
   else if (fileScreen && loading) page = <FileLoading/>;
@@ -142,14 +150,14 @@ function App() {
 
   return <main className={`app-shell screen-${route.screen}`}>
     <header className="app-header"><div className="header-inner">
-      {rootScreen ? <button className={route.screen === "home" ? "home-header-brand" : "header-brand"} onClick={() => navigate("home")} aria-label="LinkBox home"><Brand/></button> : <button className="icon-button" onClick={() => navigate("files")} aria-label="Back to files"><BrandIcon name="back"/></button>}
+      {rootScreen ? <button className={route.screen === "home" ? "home-header-brand" : "header-brand"} onClick={() => navigate("home")} aria-label="LinkBox home"><Brand/></button> : <button className="icon-button" onClick={() => navigate(route.screen==="accounts"?"settings":"files")} aria-label={route.screen==="accounts"?"Back to settings":"Back to files"}><BrandIcon name="back"/></button>}
       {!rootScreen && <h1 className="page-title">{title}</h1>}
       <nav className="desktop-nav" aria-label="Main navigation">{(["home", "files", "storage"] as const).map(screen => <button className={route.screen === screen ? "active" : ""} key={screen} onClick={() => navigate(screen)}>{screen[0].toUpperCase() + screen.slice(1)}</button>)}</nav>
       <button className="icon-button settings-button" onClick={() => navigate("settings")} aria-label="Settings"><BrandIcon name="settings"/></button>
     </div></header>
     <div className="page-content">{error && <div className="connection-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => void refresh()}><RefreshCw size={15}/>Retry</button></div>}{page}</div>
     {rootScreen && <><button className="floating-add" onClick={() => { navigate("home"); window.setTimeout(() => document.getElementById("magnet")?.focus(), 0); }} aria-label="Add a link"><BrandIcon name="add" size={28}/></button><nav className="bottom-nav" aria-label="Bottom navigation"><button className="active" aria-current={route.screen === "files" ? "page" : undefined} onClick={() => navigate("files")}><BrandIcon name="folder" size={29}/>Files</button><button onClick={() => navigate("storage")}><BrandIcon name="storage" size={29}/>Storage</button></nav></>}
-    {actions && <ActionsSheet key={actions.file.id + (actions.entry?.id ?? "")} file={actions.file} entry={actions.entry} onClose={() => setActions(null)} onOpen={() => open(actions.file, actions.entry)} onDownload={() => void download(actions.file, actions.entry)} onShare={() => void share(actions.file, actions.entry)} onCopy={() => void share(actions.file, actions.entry, true)} onUnavailable={() => navigate("unavailable")} onDelete={()=>requestDelete(actions.file)}/>}
+    {actions && <ActionsSheet key={actions.file.id + (actions.entry?.id ?? "")} file={actions.file} entry={actions.entry} onClose={() => setActions(null)} onOpen={() => open(actions.file, actions.entry)} onDownload={() => void download(actions.file, actions.entry)} onShare={() => void share(actions.file, actions.entry)} onCopy={() => copyDirectLink(actions.file, actions.entry)} onDelete={()=>requestDelete(actions.file)}/>}
     {deleteTarget&&<DeleteDownloadSheet file={deleteTarget} busy={deleteBusy} error={deleteError} onClose={()=>setDeleteTarget(null)} onConfirm={()=>void deleteOwn()}/>}
     {notice && <div className="toast" role="status">{notice}<button onClick={() => setNotice("")} aria-label="Dismiss">×</button></div>}
   </main>;

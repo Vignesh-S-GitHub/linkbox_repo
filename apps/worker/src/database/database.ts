@@ -1,7 +1,9 @@
-import type { AccountState, DownloadRow } from "../types";
+import type { AccountConfig, AccountState, DownloadRow } from "../types";
 export interface Database {
+ accountConfigurations():Promise<AccountConfig[]>;
+ saveAccountConfiguration(account:AccountConfig):Promise<void>;
  syncAccounts(accounts:AccountState[]):Promise<void>;
- cachedAccounts():Promise<AccountState[]>;
+ cachedAccounts(includeDisabled?:boolean):Promise<AccountState[]>;
  acquireLease(name:string,now:number,ttl:number):Promise<string|null>;
  releaseLease(name:string,holder:string):Promise<void>;
  pruneGuards(now:number):Promise<void>;
