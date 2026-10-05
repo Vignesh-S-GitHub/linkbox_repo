@@ -11,6 +11,7 @@ import { StorageCard } from "./components/StorageCard";
 import { ActionsSheet } from "./components/ActionsSheet";
 import { DeleteDownloadSheet } from "./components/DeleteDownloadSheet";
 import { AboutPage, SettingsPage } from "./pages/InfoPages";
+import { AccountsPage } from "./pages/AccountsPage";
 import { FileLoading, FolderPage, PlayerPage, PreviewPage, ProgressPage, UnavailablePage, LivePreviewPage } from "./pages/FilePages";
 import { StorageFullPage } from "./pages/StorageFullPage";
 import { useDownloads } from "./hooks/useDownloads";
@@ -20,7 +21,7 @@ import { formatBytes } from "./lib/format";
 import { routeUrl, isFolderView, type Screen } from "./lib/routes";
 
 type Selection = { file: PublicDownload; entry?: FileEntry };
-const pageTitles: Partial<Record<Screen, string>> = { progress: "Add Link", storage: "Storage", "storage-full": "Storage full", settings: "Settings", about: "About LinkBox" };
+const pageTitles: Partial<Record<Screen, string>> = { progress: "Add Link", storage: "Storage", "storage-full": "Storage full", settings: "Settings", accounts:"Accounts", about: "About LinkBox" };
 
 function App() {
   const { downloads, storage, loading, error, refresh, setDownloads } = useDownloads();
@@ -126,6 +127,7 @@ function App() {
   </>;
   else if (route.screen === "storage") page = <section className="storage-page"><StorageCard storage={storage} onRefresh={() => void refresh()}/><div className="storage-stats">{([["Total Storage", storage?.capacityBytes], ["Used Storage", storage?.usedBytes], ["Available", storage?.availableBytes]] as const).map(([label, bytes]) => <div key={label}><BrandIcon name="storage" size={17}/><span>{label}</span><strong>{bytes === undefined ? "—" : formatBytes(bytes)}</strong></div>)}</div><div className="storage-counts"><p><BrandIcon name="add" size={17}/><span>Active downloads</span><strong>{downloading.length}</strong></p><p><BrandIcon name="check" size={17}/><span>Ready files</span><strong>{ready.length}</strong></p></div></section>;
   else if (route.screen === "settings") page = <SettingsPage go={navigate}/>;
+  else if (route.screen === "accounts") page = <AccountsPage onChanged={()=>void refresh()}/>;
   else if (route.screen === "about") page = <AboutPage section={route.section}/>;
   else if (route.screen === "storage-full") page = storageFull ? <StorageFullPage error={storageFull} onFiles={() => navigate("files")} onCancel={() => navigate("home")}/> : <UnavailablePage onFiles={() => navigate("files")} message="No pending storage request."/>;
   else if (fileScreen && loading) page = <FileLoading/>;
@@ -142,7 +144,7 @@ function App() {
 
   return <main className={`app-shell screen-${route.screen}`}>
     <header className="app-header"><div className="header-inner">
-      {rootScreen ? <button className={route.screen === "home" ? "home-header-brand" : "header-brand"} onClick={() => navigate("home")} aria-label="LinkBox home"><Brand/></button> : <button className="icon-button" onClick={() => navigate("files")} aria-label="Back to files"><BrandIcon name="back"/></button>}
+      {rootScreen ? <button className={route.screen === "home" ? "home-header-brand" : "header-brand"} onClick={() => navigate("home")} aria-label="LinkBox home"><Brand/></button> : <button className="icon-button" onClick={() => navigate(route.screen==="accounts"?"settings":"files")} aria-label={route.screen==="accounts"?"Back to settings":"Back to files"}><BrandIcon name="back"/></button>}
       {!rootScreen && <h1 className="page-title">{title}</h1>}
       <nav className="desktop-nav" aria-label="Main navigation">{(["home", "files", "storage"] as const).map(screen => <button className={route.screen === screen ? "active" : ""} key={screen} onClick={() => navigate(screen)}>{screen[0].toUpperCase() + screen.slice(1)}</button>)}</nav>
       <button className="icon-button settings-button" onClick={() => navigate("settings")} aria-label="Settings"><BrandIcon name="settings"/></button>

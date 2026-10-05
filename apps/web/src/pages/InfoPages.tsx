@@ -10,7 +10,7 @@ export function SettingsPage({ go }: { go: (screen: Screen, id?: string, entry?:
   return <div className="settings-page">
     <section className="card appearance"><h2>Appearance</h2>{["system", "light", "dark"].map(value => <label key={value}><input type="radio" name="appearance" checked={theme === value} onChange={() => setTheme(value)}/>{value[0].toUpperCase() + value.slice(1)}</label>)}</section>
     <div className="menu-card">{([
-      ["storage", "Storage", "storage", undefined], ["info", "About LinkBox", "about", undefined],
+      ["storage", "Storage", "storage", undefined], ["info", "Accounts", "accounts", undefined], ["info", "About LinkBox", "about", undefined],
       ["info", "How it works", "about", "how"], ["file", "Privacy", "about", "privacy"],
     ] as const).map(([icon, title, screen, section]) => <button key={title} onClick={() => go(screen, undefined, undefined, section)}><BrandIcon name={icon}/><span>{title}</span><ChevronRight size={17}/></button>)}</div>
     <footer className="version"><Brand/><small>Version 1.0.0</small></footer>

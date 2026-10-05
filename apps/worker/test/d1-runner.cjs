@@ -30,6 +30,7 @@ function setup() {
   sqlite.exec(readFileSync(join(__dirname, "../migrations/0002_live_guards.sql"), "utf8"));
   sqlite.exec(readFileSync(join(__dirname, "../migrations/0003_content_type.sql"), "utf8"));
   sqlite.exec(readFileSync(join(__dirname, "../migrations/0004_download_owner.sql"), "utf8"));
+  sqlite.exec(readFileSync(join(__dirname, "../migrations/0005_account_configuration.sql"), "utf8"));
   const binding = {
     prepare(sql) {
       let values = [];
@@ -234,6 +235,103 @@ test("D1 repeated expiration is idempotent and preserves all unexpired files", a
     assert.equal(await expireDueItems(db, adapter, now), 0); assert.equal(calls, 1);
     for (const row of unexpired) assert.equal((await db.findByPublicId(row.publicId)).status, "ready");
   } finally { sqlite.close(); }
+});
+const adminKey="fixture-private-admin-key-"+"x".repeat(32);
+const adminHash=require("node:crypto").createHash("sha256").update(adminKey).digest("hex");
+const configA={id:"admin-a",label:"Private account A",enabled:true,capacityBytes:5000,secretKeyReference:"SEEDR_ACCOUNT_A_TOKEN"};
+function adminEnv(binding,extra={}) {return {DB:binding,SEEDR_MODE:"live",SEEDR_ACCESS:"full",ALLOWED_ORIGIN:"https://app.example",LINKBOX_ADMIN_KEY_SHA256:adminHash,SEEDR_ACCOUNT_CONFIG:JSON.stringify([configA]),SEEDR_ACCOUNT_A_TOKEN:"fixture-A",SEEDR_ACCOUNT_B_TOKEN:"fixture-B",SEEDR_ACCOUNT_C_TOKEN:"fixture-C",...extra};}
+function adminRequest(path="",body,key=adminKey,origin="https://app.example") {return new Request(`https://worker.example/api/admin/accounts${path}`,{method:body?"POST":"GET",headers:{authorization:`Bearer ${key}`,origin,"content-type":"application/json"},...(body?{body:JSON.stringify(body)}:{})});}
+const addB={label:"Private account B",secretKeyReference:"SEEDR_ACCOUNT_B_TOKEN",distinctAccount:true};
+test("admin authentication fails closed with no Seedr calls; wrong-key retries are throttled",async()=>{
+ const {sqlite,binding}=setup(),original=globalThis.fetch;try{
+ globalThis.fetch=()=>assert.fail("unauthorized request must never reach Seedr");const env=adminEnv(binding);
+ assert.equal((await worker.fetch(adminRequest("",undefined,"bad"),env)).status,401);
+ assert.equal((await worker.fetch(adminRequest("",undefined,"bad"),env)).status,429);
+ assert.equal((await worker.fetch(adminRequest(),adminEnv(binding,{LINKBOX_ADMIN_KEY_SHA256:undefined}))).status,503);
+ assert.equal((await worker.fetch(adminRequest("",addB,adminKey,"https://evil.example"),env)).status,403);
+ assert.equal((await worker.fetch(new Request("http://worker.example/api/admin/accounts",{headers:{authorization:`Bearer ${adminKey}`}}),env)).status,403);
+ const preflight=await worker.fetch(new Request("https://worker.example/api/admin/accounts",{method:"OPTIONS",headers:{origin:"https://app.example"}}),env);
+ assert.equal(preflight.status,204);assert.ok(preflight.headers.get("access-control-allow-headers").includes("authorization"));
+ assert.equal((await worker.fetch(adminRequest("",addB),adminEnv(binding,{SEEDR_ACCESS:"storage-only"}))).status,409);
+ assert.equal(sqlite.prepare("SELECT count(*) AS n FROM account_configuration").get().n,0);
+ }finally{globalThis.fetch=original;sqlite.close();}
+});
+test("admin additions persist verified quota and expose only combined storage to visitors",async()=>{
+ const {sqlite,db,binding}=setup(),original=globalThis.fetch;let calls=0;try{
+ const env=adminEnv(binding);globalThis.fetch=async(url,options)=>{calls++;assert.equal(options.method,"GET");assert.equal(url,"https://www.seedr.cc/api/v0.1/p/me/quota");return Response.json({space_max:options.headers.Authorization==="Bearer fixture-B"?7000:5000,space_used:1000});};
+ const response=await worker.fetch(adminRequest("",addB),env);assert.equal(response.status,200);const value=await response.json();
+ assert.equal(value.accounts.length,2);assert.equal(value.accounts[1].capacityBytes,7000);assert.equal(calls,1);
+ for(const secret of [adminKey,adminHash,"fixture-A","fixture-B","secretKeyReference"])assert.ok(!JSON.stringify(value).includes(secret));
+ assert.equal((await worker.fetch(adminRequest("",{...addB,label:"Again"}),env)).status,409);assert.equal(calls,1);
+ assert.equal((await worker.fetch(adminRequest("",{...addB,secretKeyReference:"SEEDR_ACCOUNT_C_TOKEN",label:"Private account C"}),env)).status,200);
+ assert.equal((await new D1MetadataDatabase(binding).accountConfigurations()).length,2);
+ const storage=await worker.fetch(new Request("https://worker.example/api/storage"),env);assert.equal(storage.status,200);const publicValue=await storage.json();assert.equal(publicValue.capacityBytes,17000);
+ assert.ok(!JSON.stringify(publicValue).includes("Private account"));assert.equal(publicValue.accounts,undefined);assert.equal(publicValue.secretKeyReference,undefined);
+ const stored=(await db.accountConfigurations())[0];await assert.rejects(db.saveAccountConfiguration({...stored,secretKeyReference:"SEEDR_CHANGED_TOKEN"}),error=>error.code==="account_reference_immutable");
+ }finally{globalThis.fetch=original;sqlite.close();}
+});
+test("bad admin additions reject tokens, duplicate tokens and provider failures without saving",async()=>{
+ const {sqlite,db,binding}=setup(),original=globalThis.fetch;try{
+ const env=adminEnv(binding);let calls=0;globalThis.fetch=async()=>{calls++;return Response.json({private:"provider secret"},{status:401});};
+ for(const body of [{...addB,token:"never-store"},{...addB,distinctAccount:false},{...addB,label:"bad\nlabel"},{...addB,secretKeyReference:"SEEDR_MISSING_TOKEN"}])assert.ok((await worker.fetch(adminRequest("",body),env)).status>=400);
+ assert.equal((await worker.fetch(adminRequest("",addB),adminEnv(binding,{SEEDR_ACCOUNT_B_TOKEN:"fixture-A"}))).status,409);assert.equal(calls,0);
+ const failed=await worker.fetch(adminRequest("",addB),env);assert.equal(failed.status,503);assert.ok(!(await failed.text()).includes("provider secret"));assert.equal(calls,1);assert.deepEqual(await db.accountConfigurations(),[]);
+ const lock=await db.acquireLease("submission",Date.now(),120000);assert.equal((await worker.fetch(adminRequest("",addB),env)).status,409);assert.equal(calls,1);await db.releaseLease("submission",lock);
+ }finally{globalThis.fetch=original;sqlite.close();}
+});
+test("disabling an account blocks admission only, keeps history and cannot disable the last account",async()=>{
+ const {sqlite,db,binding}=setup(),original=globalThis.fetch;try{
+ const env=adminEnv(binding);globalThis.fetch=async()=>Response.json({space_max:5000,space_used:1000});
+ assert.equal((await worker.fetch(adminRequest("",addB),env)).status,200);
+ assert.equal((await worker.fetch(adminRequest("/admin-a",{enabled:false}),env)).status,200);
+ const {configuredAccounts}=require("./logic-test-build/apps/worker/src/accounts/configuration.js");
+ const configs=await configuredAccounts(env,db);assert.equal(configs.find(value=>value.id==="admin-a").enabled,false);
+ const remaining=configs.find(value=>value.enabled);assert.equal((await worker.fetch(adminRequest(`/${remaining.id}`,{enabled:false}),env)).status,409);
+ const {LiveSeedrAdapter}=require("./logic-test-build/apps/worker/src/seedr/live-adapter.js");const adapter=new LiveSeedrAdapter(configs,env);const publicId=crypto.randomUUID();let checked=false;
+ globalThis.fetch=async(url,options)=>{assert.equal(options.headers.Authorization,"Bearer fixture-A");checked=true;assert.ok(url.endsWith("/fs/folder/10/contents"));return Response.json({id:10,path:`LinkBox-${publicId}`,parent:0,files:[],folders:[]});};
+ await adapter.contents("admin-a",`linkbox:${publicId}:10:0`);assert.ok(checked);
+ globalThis.fetch=async()=>Response.json({space_max:5000,space_used:1000});assert.equal((await worker.fetch(adminRequest("/admin-a",{enabled:true}),env)).status,200);
+ }finally{globalThis.fetch=original;sqlite.close();}
+});
+test("mock account verification stays offline and configuration changes retain existing items",async()=>{
+ const {MockSeedrAdapter}=require("./logic-test-build/apps/worker/src/seedr/mock-adapter.js");const original=globalThis.fetch;
+ try{globalThis.fetch=()=>assert.fail("mock must remain offline");const config={...configA,id:"seedr-a",capacityBytes:5*1024**3};const adapter=new MockSeedrAdapter([config]);
+ const item=await adapter.addMagnet("seedr-a","magnet:?xt=urn:btih:"+"a".repeat(40)+"&xl=100&dn=Sample.mp4");
+ adapter.configureAccounts([{...config,enabled:false},{...config,id:"b"}]);assert.equal((await adapter.syncAccounts()).length,1);assert.equal((await adapter.getItem("seedr-a",item.itemId)).sizeBytes,100);assert.equal((await adapter.verifyAccount("SEEDR_NEW_TOKEN")).capacityBytes,5*1024**3);
+ await adapter.deleteItem("seedr-a",item.itemId);await assert.rejects(adapter.getItem("seedr-a",item.itemId));
+ }finally{globalThis.fetch=original;}
+});
+test("account limits and concurrent changes fail safely before quota or metadata writes",async()=>{
+ const {sqlite,db,binding}=setup(),original=globalThis.fetch;try{
+ const env=adminEnv(binding);const configs=Array.from({length:8},(_,index)=>({...configA,id:`a-${index}`,secretKeyReference:`SEEDR_ACCOUNT_${index}_TOKEN`}));
+ globalThis.fetch=()=>assert.fail("account limit must reject before contacting Seedr");
+ assert.equal((await worker.fetch(adminRequest("",addB),{...env,SEEDR_ACCOUNT_CONFIG:JSON.stringify(configs)})).status,409);assert.deepEqual(await db.accountConfigurations(),[]);
+ let unblock;let calls=0;const waiting=new Promise(resolve=>{unblock=resolve;});globalThis.fetch=async()=>{calls++;await waiting;return Response.json({space_max:5000,space_used:0});};
+ const first=worker.fetch(adminRequest("",addB),env);
+ // Wait until the first request holds the admission lease, not for a wall-clock sleep.
+ for(let i=0;i<20&&!calls;i++)await new Promise(resolve=>setImmediate(resolve));assert.equal(calls,1);
+ assert.equal((await worker.fetch(adminRequest("",addB),env)).status,409);unblock();assert.equal((await first).status,200);assert.equal(calls,1);assert.equal((await db.accountConfigurations()).length,1);
+ }finally{globalThis.fetch=original;sqlite.close();}
+});
+test("Cron still expires app-owned downloads on a disabled account using its retained secret",async()=>{
+ const {sqlite,db,binding}=setup(),original=globalThis.fetch;const publicId=crypto.randomUUID();let pending;const deleted=[];
+ try {
+ const env=adminEnv(binding),timestamp=new Date(Date.now()-25*3600000).toISOString();
+ await db.saveAccountConfiguration({...configA,enabled:false});await db.saveAccountConfiguration({...configA,id:"admin-b",secretKeyReference:"SEEDR_ACCOUNT_B_TOKEN"});
+ await db.syncAccounts([{...configA,usedBytes:1000,availableBytes:4000,lastSyncedAt:new Date().toISOString()}]);
+ const row=await db.create(fixture(25,{publicId,seedrAccountId:"admin-a",seedrItemId:`linkbox:${publicId}:10:20`,createdAt:timestamp,cleanupAllowedAt:new Date(Date.parse(timestamp)+3*3600000).toISOString(),expiresAt:new Date(Date.parse(timestamp)+24*3600000).toISOString()}));
+ globalThis.fetch=async(url,options)=>{
+ const path=new URL(url).pathname.replace("/api/v0.1/p","");
+ if(path==="/me/quota"){assert.equal(options.headers.Authorization,"Bearer fixture-B");return Response.json({space_max:5000,space_used:0});}
+ assert.equal(options.headers.Authorization,"Bearer fixture-A");
+ if(options.method==="DELETE"){deleted.push(path);return Response.json({success:true});}
+ if(path==="/fs/folder/10/contents")return Response.json({id:10,path:`LinkBox-${publicId}`,files:[],folders:[]});
+ if(path==="/tasks/20")return Response.json({task:{id:20,folder_id:10}});
+ assert.fail("Unexpected mock endpoint");
+ };
+ worker.scheduled({},env,{waitUntil(value){pending=value;}});await pending;
+ assert.deepEqual(deleted,["/tasks/20","/fs/folder/10"]);assert.equal((await db.findByPublicId(row.publicId)).status,"expired");
+ }finally{globalThis.fetch=original;sqlite.close();}
 });
 test("D1 raw provider errors never appear in public database errors", async () => {
   const db = new D1MetadataDatabase({ prepare() { throw new Error("private SQL and internal identifier"); } });

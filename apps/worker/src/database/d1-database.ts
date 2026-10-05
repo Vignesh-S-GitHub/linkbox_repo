@@ -1,5 +1,5 @@
 import type { Database } from "./database";
-import type { AccountState, DownloadRow } from "../types";
+import type { AccountConfig, AccountState, DownloadRow } from "../types";
 import { ApiProblem } from "../utils/magnet";
 
 type StoredRow = {
@@ -27,6 +27,22 @@ const mapRow = (row: StoredRow): DownloadRow => ({
 export class D1MetadataDatabase implements Database {
   constructor(private readonly db: D1Database) {}
 
+  async accountConfigurations(): Promise<AccountConfig[]> {
+    const result = await this.query(() => this.db.prepare("SELECT id,label,enabled,capacity_bytes,secret_key_reference FROM account_configuration ORDER BY created_at,id LIMIT 9").all<{
+      id:string; label:string; enabled:number; capacity_bytes:number; secret_key_reference:string
+    }>());
+    return result.results.map(row => ({id:row.id,label:row.label,enabled:row.enabled===1,capacityBytes:row.capacity_bytes,secretKeyReference:row.secret_key_reference}));
+  }
+  async saveAccountConfiguration(account: AccountConfig): Promise<void> {
+    const now = new Date().toISOString();
+    const result=await this.query(() => this.db.prepare(`INSERT INTO account_configuration(id,label,enabled,capacity_bytes,secret_key_reference,created_at,updated_at)
+      VALUES(?1,?2,?3,?4,?5,?6,?6) ON CONFLICT(id) DO UPDATE SET label=excluded.label,enabled=excluded.enabled,
+      capacity_bytes=excluded.capacity_bytes,updated_at=excluded.updated_at
+      WHERE account_configuration.secret_key_reference=excluded.secret_key_reference RETURNING id`)
+      .bind(account.id,account.label,Number(account.enabled),account.capacityBytes,account.secretKeyReference,now).first<{id:string}>());
+    if (!result) throw new ApiProblem(409,"account_reference_immutable","An existing account's Worker secret name cannot be changed.");
+  }
+
   async acquireLease(name: string, now: number, ttl: number): Promise<string | null> {
     const holder = crypto.randomUUID();
     const result = await this.query(() => this.db.prepare(`INSERT INTO request_guards(name,holder,expires_ms)
@@ -40,8 +56,8 @@ export class D1MetadataDatabase implements Database {
   async pruneGuards(now: number): Promise<void> {
     await this.query(() => this.db.prepare("DELETE FROM request_guards WHERE expires_ms<=?1").bind(now).run());
   }
-  async cachedAccounts(): Promise<AccountState[]> {
-    const result = await this.query(() => this.db.prepare("SELECT * FROM seedr_accounts WHERE enabled=1").all<{
+  async cachedAccounts(includeDisabled=false): Promise<AccountState[]> {
+    const result = await this.query(() => this.db.prepare(`SELECT * FROM seedr_accounts${includeDisabled?"":" WHERE enabled=1"}`).all<{
       id:string;label:string;enabled:number;capacity_bytes:number;used_bytes:number;available_bytes:number;secret_key_reference:string;last_synced_at:string
     }>());
     return result.results.map(row=>({id:row.id,label:row.label,enabled:!!row.enabled,capacityBytes:row.capacity_bytes,usedBytes:row.used_bytes,

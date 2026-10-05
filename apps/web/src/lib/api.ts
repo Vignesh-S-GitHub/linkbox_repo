@@ -1,4 +1,4 @@
-import type { ApiError, FileContents, PublicDownload, StorageSummary } from "@temporary-share/shared";
+import type { AdminAccountList, ApiError, FileContents, PublicDownload, StorageSummary } from "@temporary-share/shared";
 const baseUrl = import.meta.env.VITE_API_URL ?? "http://localhost:8787";
 const sessionKey = "temporary-share-session";
 const storedSession = localStorage.getItem(sessionKey);
@@ -10,6 +10,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 export const api = {
+  adminAccounts: (key:string,signal?:AbortSignal) => request<AdminAccountList>("/api/admin/accounts",{headers:{authorization:`Bearer ${key}`},signal}),
+  adminRefresh: (key:string,signal?:AbortSignal) => request<AdminAccountList>("/api/admin/accounts/refresh",{method:"POST",headers:{authorization:`Bearer ${key}`},signal}),
+  adminAdd: (key:string,body:{label:string;secretKeyReference:string;distinctAccount:boolean},signal?:AbortSignal) => request<AdminAccountList>("/api/admin/accounts",{method:"POST",headers:{authorization:`Bearer ${key}`},body:JSON.stringify(body),signal}),
+  adminEnable: (key:string,id:string,enabled:boolean,signal?:AbortSignal) => request<AdminAccountList>(`/api/admin/accounts/${encodeURIComponent(id)}`,{method:"POST",headers:{authorization:`Bearer ${key}`},body:JSON.stringify({enabled}),signal}),
   storage: () => request<StorageSummary>("/api/storage"),
   downloads: () => request<PublicDownload[]>("/api/downloads"),
   create: (magnet: string) => request<PublicDownload>("/api/downloads", { method: "POST", body: JSON.stringify({ magnet }) }),

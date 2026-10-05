@@ -242,7 +242,7 @@ test("storage-only list is empty and every file mutation is blocked without exte
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("storage-only never falls back to fake quota on missing token or extra accounts", async () => {
+test("storage-only never falls back to fake quota on missing token or malformed accounts", async () => {
   const originalFetch = globalThis.fetch;
   try {
     globalThis.fetch = () => assert.fail("invalid setup must not issue requests");

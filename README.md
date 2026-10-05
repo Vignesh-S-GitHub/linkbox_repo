@@ -181,9 +181,36 @@ Use mock mode for safe synthetic cleanup tests. In current Wrangler, you can als
 
 ## Adding another Seedr account
 
-Append an enabled object to `SEEDR_ACCOUNT_CONFIG` with an internal ID, label, actual capacity and a distinct `secretKeyReference`. Store that token with `wrangler secret put`. D1 upserts metadata during storage refresh; no seed migration or selection rewrite is necessary. Removed accounts retain metadata history but are disabled when remaining accounts sync.
+**Settings → Accounts is a private owner-only section.** Public visitors see no account list, names, identifiers or tokens. Unlocking requires a separate private admin key; your Seedr PAT is never entered in the website.
+
+First, apply the metadata migration and configure owner access from your local repository:
+
+```powershell
+cd C:\Users\shanm\Projects\LinkBox
+npm run db:migrate:remote
+npm run admin:setup:production
+```
+
+The helper prompts with hidden input. Choose a unique random 32–128 character key from your password manager (letters, numbers, `.`, `_`, `~`, `-`), save it securely, and never send it in chat. It uploads only its SHA-256 digest as the Worker Secret `LINKBOX_ADMIN_KEY_SHA256`. The raw key is never saved locally or passed on the command line. Use HTTPS for deployed admin access. The browser keeps the key in memory only; leaving Accounts, hiding the tab, pressing Lock, or 10 minutes of inactivity locks it. No persistent admin login is created. Reset/rotate it by running the helper again. Other browsers and unauthorized requests cannot manage accounts.
+
+To connect a **different** Seedr account:
+
+```powershell
+cd C:\Users\shanm\Projects\LinkBox\apps\worker
+npx wrangler secret put SEEDR_ACCOUNT_B_TOKEN --env production
+```
+
+Paste the PAT only into Wrangler's private prompt, not Settings, source code or a terminal command argument. It needs the same documented scopes as the first account. Then open Settings → Accounts, unlock, enter a label and **secret name** `SEEDR_ACCOUNT_B_TOKEN`, confirm it belongs to a different account, and choose **Verify & connect account**. The Worker reads the verified official quota endpoint and saves actual capacity. The public storage total automatically includes enabled accounts; a single file still must fit wholly on one account. Use unique secret names for accounts C/D/etc.
+
+Only metadata (label, enabled flag, actual capacity and secret reference) is stored in D1's `account_configuration` table. Credentials remain in Worker Secrets. The existing Wrangler account is the baseline; D1 overrides its enabled flag and adds accounts. Redeploying does not discard these additions. Changes serialize with submissions/deletions using the existing D1 lease. Identical tokens under different secret names are rejected; the verified quota response does **not** identify an account, so two different tokens for the same account cannot be detected automatically. The distinct-account confirmation is required to avoid double-counting. Do not register another PAT for an existing account.
+
+**Accept new downloads** disables admissions only. Existing downloads remain playable/downloadable, owner-deletable and eligible for 24-hour Cron expiry. Keep disabled accounts' secrets until all their files expire; do not delete/rename those bindings. At least one account must stay enabled. Refresh performs at most one quota request per enabled account and is throttled to 15 seconds; ordinary public storage remains cached for 60 seconds. Account removal/token editing in the browser is deliberately not supported.
+
+For local owner testing, run `npm run admin:setup`, add the additional PAT privately to ignored `apps/worker/.dev.vars` under the matching secret name, and restart the Worker. Local D1 and production D1 are separate: connecting an account locally does not connect it in production. Mock mode uses simulated quota and files, never requests Seedr, and resets metadata on restart; synthetic secret values can be used for mock account tests.
 
 Full mode handles up to 8 configured accounts without rewriting selection logic. IDs and token references must be distinct, and capacities must be positive whole byte counts. Keep disabled accounts and their credentials configured until their old records are cleaned; removing an account or token immediately prevents cleanup of those records. No individual download spans accounts.
+
+Without `LINKBOX_ADMIN_KEY_SHA256`, the Accounts page stays locked with a setup message; ordinary file functionality is unchanged. Failed key attempts are throttled per hashed IP for 15 seconds. Admin mutations require the exact allowed origin and a valid Bearer key. Account responses are whitelist-only and never include the hash or PAT. Use a high-entropy key, not an ordinary password; SHA-256 is appropriate here for random access keys, not low-entropy password storage.
 
 ## Switching mock → full live
 

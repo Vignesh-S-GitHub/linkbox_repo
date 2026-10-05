@@ -44,8 +44,12 @@ export class LiveSeedrAdapter implements SeedrAdapter {
   constructor(private readonly config: AccountConfig[], private readonly env: Env) {}
   private client(accountId: string): SeedrTokenClient {
     const account = this.config.find(value => value.id === accountId);
-    const secret = account && this.env[account.secretKeyReference];
-    if (!account || typeof secret !== "string" || account.secretKeyReference.endsWith("_BASIC_AUTH")) throw new ApiProblem(503, "seedr_token_missing", "Configure a private Seedr Personal Access Token.");
+    if (!account) throw new ApiProblem(503, "seedr_token_missing", "Configure a private Seedr Personal Access Token.");
+    return this.secretClient(account.secretKeyReference);
+  }
+  private secretClient(reference: string): SeedrTokenClient {
+    const secret = this.env[reference];
+    if (typeof secret !== "string" || !secret || reference.endsWith("_BASIC_AUTH")) throw new ApiProblem(503, "seedr_token_missing", "Configure a private Seedr Personal Access Token.");
     return new SeedrTokenClient(secret, fetch, () => {
       // One adapter per invocation. Leave room for optional Turnstile and stay
       // below the free Worker's 50 external-subrequest limit, even on recovery.
@@ -53,6 +57,7 @@ export class LiveSeedrAdapter implements SeedrAdapter {
       this.requests++;
     });
   }
+  async verifyAccount(reference: string) { return this.secretClient(reference).quota(); }
   async syncAccounts(): Promise<AccountState[]> {
     return Promise.all(this.config.filter(account => account.enabled).map(async account => ({
       ...account, ...await this.client(account.id).quota(), lastSyncedAt: new Date().toISOString(),

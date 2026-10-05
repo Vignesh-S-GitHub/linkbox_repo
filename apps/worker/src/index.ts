@@ -12,18 +12,20 @@ import { publicDownload } from "./types";
 import { ApiProblem, magnetIdentity, sha256, validateMagnet } from "./utils/magnet";
 import { readJsonBody } from "./utils/request-body";
 import { ownsDownload, requestOwnerHash } from "./utils/owner";
+import { configuredEnvironment } from "./accounts/configuration";
+import { adminAccounts, changeAccount, requireAdmin } from "./accounts/admin";
 
 // Only synthetic local demo state lives in memory. Live coordination lives in D1.
 let mockAdapter: MockSeedrAdapter | undefined;
 function adapterFor(env: Env): SeedrAdapter {
   const accounts = accountsFromEnv(env);
-  if (env.SEEDR_MODE === "mock") { mockAdapter ??= new MockSeedrAdapter(accounts); return mockAdapter; }
+  if (env.SEEDR_MODE === "mock") { mockAdapter ??= new MockSeedrAdapter(accounts); mockAdapter.configureAccounts(accounts); return mockAdapter; }
   return new LiveSeedrAdapter(accounts, env);
 }
 function cors(env: Env, request: Request) {
   const origin = request.headers.get("origin"), allowed = env.ALLOWED_ORIGIN ?? "http://localhost:5173";
   return { "access-control-allow-origin": origin === allowed ? origin : allowed,
-    "access-control-allow-methods": "GET, POST, OPTIONS", "access-control-allow-headers": "content-type, x-session-id",
+    "access-control-allow-methods": "GET, POST, OPTIONS", "access-control-allow-headers": "content-type, x-session-id, authorization",
     "vary": "Origin", "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer" };
 }
 function json(value: unknown, status = 200, headers: HeadersInit = {}) {
@@ -96,7 +98,7 @@ async function verifyTurnstile(token: unknown, env: Env) {
   if (!value.success || value.hostname !== new URL(env.ALLOWED_ORIGIN ?? "http://localhost:5173").hostname) throw new ApiProblem(403, "verification_failed", "Security verification failed. Please try again.");
 }
 async function createDownload(request: Request, env: Env) {
-  const body = await readJsonBody(request), magnet = validateMagnet(body.magnet), database = databaseFor(env), adapter = adapterFor(env);
+  const body = await readJsonBody(request), magnet = validateMagnet(body.magnet), database = databaseFor(env);
   const ownerSessionHash=await requestOwnerHash(request);
   if(!ownerSessionHash)throw new ApiProblem(400,"invalid_session","A secure browser session is required. Reload LinkBox and try again.");
   await verifyTurnstile(body.turnstileToken, env);
@@ -104,6 +106,9 @@ async function createDownload(request: Request, env: Env) {
   const lock = await database.acquireLease("submission", Date.now(), 120000);
   if (!lock) throw new ApiProblem(429, "submission_busy", "Another download is being added. Please try again shortly.");
   try {
+    // Resolve inside the admission lock so a just-disabled account is never selected.
+    env = await configuredEnvironment(env,database);
+    const adapter = adapterFor(env);
     if (await database.findActiveByHash(hash)) throw new ApiProblem(409, "duplicate_magnet", "That download is already active.");
     const [inspection, accounts, active] = await Promise.all([adapter.inspectMagnet(magnet), adapter.syncAccounts(), database.listActive()]);
     await database.syncAccounts(accounts);
@@ -150,17 +155,41 @@ async function appFetch(request: Request, env: Env): Promise<Response> {
     if (origin && origin !== (env.ALLOWED_ORIGIN ?? "http://localhost:5173")) throw new ApiProblem(403, "origin_not_allowed", "This origin is not allowed.");
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
     const url = new URL(request.url), path = url.pathname;
-    if (!path.startsWith("/api/") || (storageOnly(env) && !path.startsWith("/api/downloads") && path !== "/api/storage")) throw new ApiProblem(404, "not_found", "Not found.");
+    if (!path.startsWith("/api/")) throw new ApiProblem(404, "not_found", "Not found.");
+    if (path.startsWith("/api/admin/")) {
+      const database = databaseFor(env);
+      await requireAdmin(request,env,database);
+      const match = /^\/api\/admin\/accounts(?:\/(refresh|[a-z0-9-]{1,64}))?$/.exec(path);
+      if (!match) throw new ApiProblem(404,"not_found","Not found.");
+      if (request.method !== "GET" && request.method !== "POST") throw new ApiProblem(405,"method_not_allowed","Method not allowed.");
+      if (request.method === "GET" && match[1]) throw new ApiProblem(405,"method_not_allowed","Method not allowed.");
+      if (request.method === "POST") {
+        if (storageOnly(env)) throw new ApiProblem(409,"storage_only","Account changes are disabled in read-only mode.");
+        const runtime = await configuredEnvironment(env,database), adapter = adapterFor(runtime);
+        if (match[1] === "refresh") {
+          if (!await database.acquireLease("admin-refresh",Date.now(),15000)) throw new ApiProblem(429,"refresh_cooldown","Please wait before refreshing account storage again.");
+          // Serialize cache writes with disable/add and new submissions.
+          const lock=await database.acquireLease("submission",Date.now(),120000);
+          if (!lock) throw new ApiProblem(409,"submission_busy","Please retry after the current operation finishes.");
+          try { await database.syncAccounts(await adapterFor(await configuredEnvironment(env,database)).syncAccounts()); }
+          finally { await database.releaseLease("submission",lock); }
+        } else await changeAccount(request,env,database,adapter,match[1]);
+      }
+      return json({accounts:await adminAccounts(env,database),mock:env.SEEDR_MODE==="mock",limit:8},200,headers);
+    }
+    if (storageOnly(env) && !path.startsWith("/api/downloads") && path !== "/api/storage") throw new ApiProblem(404,"not_found","Not found.");
     if (storageOnly(env)) {
       if (path === "/api/storage" && request.method === "GET") {
+        if (env.DB) env=await configuredEnvironment(env,databaseFor(env));
         const accounts = accountsFromEnv(env).filter(value => value.enabled);
-        if (accounts.length !== 1) throw new ApiProblem(503, "seedr_account_configuration", "Configure one account for read-only mode.");
         return json(toStorage(await new LiveSeedrAdapter(accounts, env).syncAccounts()), 200, headers);
       }
       if (path === "/api/downloads" && request.method === "GET") return json([], 200, headers);
       throw new ApiProblem(409, "storage_only", "File actions are disabled in read-only mode.");
     }
-    const database = databaseFor(env), adapter = adapterFor(env);
+    const database = databaseFor(env);
+    env=await configuredEnvironment(env,database);
+    const adapter = adapterFor(env);
     const ownerHash=await requestOwnerHash(request);
     const safeDownload=(row:DownloadRow)=>publicDownload(row,ownsDownload(row,ownerHash));
     if (path === "/api/storage" && request.method === "GET") return json(await storageSnapshot(database, adapter, env), 200, headers);
@@ -207,7 +236,8 @@ async function appFetch(request: Request, env: Env): Promise<Response> {
 export default { fetch: appFetch, scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
   if (storageOnly(env)) return;
   ctx.waitUntil((async () => { try {
-    const database = databaseFor(env), adapter = adapterFor(env);
+    const database = databaseFor(env);
+    const adapter = adapterFor(await configuredEnvironment(env,database));
     await expireDueItems(database, adapter, new Date().toISOString());
     await database.syncAccounts(await adapter.syncAccounts());
   } catch { console.warn("Scheduled cleanup will retry next cycle"); } })());

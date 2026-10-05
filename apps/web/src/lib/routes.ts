@@ -1,5 +1,5 @@
 import type { FileKind } from "@temporary-share/shared";
-export const screenNames = ["home", "progress", "files", "folder", "preview", "player", "storage", "storage-full", "settings", "about", "unavailable"] as const;
+export const screenNames = ["home", "progress", "files", "folder", "preview", "player", "storage", "storage-full", "settings", "accounts", "about", "unavailable"] as const;
 export type Screen = typeof screenNames[number];
 export interface Route { screen: Screen; id?: string; entry?: string; section?: string; }
 // Provider contents are authoritative; dots in torrent names are not file types.

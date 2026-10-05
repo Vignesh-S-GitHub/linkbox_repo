@@ -1,5 +1,5 @@
 import type { DownloadStatus, FileKind, PublicDownload } from "@temporary-share/shared";
-export interface Env { DB?: D1Database; SEEDR_MODE: "mock" | "live"; SEEDR_ACCESS?: "storage-only" | "full"; ALLOWED_ORIGIN?: string; MAX_FILE_SIZE_BYTES?: string; MAX_ACTIVE_DOWNLOADS?: string; SUBMISSION_COOLDOWN_SECONDS?: string; SEEDR_ACCOUNT_CONFIG?: string; TURNSTILE_SECRET_KEY?: string; [key: string]: unknown; }
+export interface Env { DB?: D1Database; SEEDR_MODE: "mock" | "live"; SEEDR_ACCESS?: "storage-only" | "full"; ALLOWED_ORIGIN?: string; MAX_FILE_SIZE_BYTES?: string; MAX_ACTIVE_DOWNLOADS?: string; SUBMISSION_COOLDOWN_SECONDS?: string; SEEDR_ACCOUNT_CONFIG?: string; TURNSTILE_SECRET_KEY?: string; LINKBOX_ADMIN_KEY_SHA256?: string; [key: string]: unknown; }
 export interface AccountConfig { id: string; label: string; enabled: boolean; capacityBytes: number; secretKeyReference: string; }
 export interface AccountState extends AccountConfig { usedBytes: number; availableBytes: number; lastSyncedAt: string; }
 export interface SeedrItem { itemId: string; displayName: string; sizeBytes: number; status: DownloadStatus; progress: number; playable: boolean; kind?: FileKind | null; fileCount?: number | null; }
