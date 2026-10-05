@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstat, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export function adminDigest(key) {
@@ -26,9 +27,13 @@ async function saveLocal(digest) {
   try {await writeFile(temporary,renderAdminVars(existing,digest),{encoding:"utf8",mode:0o600,flag:"wx"});pending=true;await rename(temporary,target);pending=false;}
   finally {if(pending)await unlink(temporary);}
 }
-async function saveProduction(digest) {
+export function wranglerCli() {
   const require=createRequire(new URL("../apps/worker/package.json",import.meta.url));
-  const cli=require.resolve("wrangler/bin/wrangler.js");
+  const manifest=require("wrangler/package.json");
+  return resolve(dirname(require.resolve("wrangler/package.json")),manifest.bin.wrangler);
+}
+async function saveProduction(digest) {
+  const cli=wranglerCli();
   await new Promise((resolve,reject)=>{
     const child=spawn(process.execPath,[cli,"secret","put","LINKBOX_ADMIN_KEY_SHA256","--env","production"],{cwd:fileURLToPath(new URL("../apps/worker",import.meta.url)),stdio:["pipe","inherit","inherit"],windowsHide:true});
     child.on("error",reject);child.stdin.on("error",reject);

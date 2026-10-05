@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { adminDigest, renderAdminVars } from "./admin-setup.mjs";
+import { existsSync } from "node:fs";
+import { adminDigest, renderAdminVars, wranglerCli } from "./admin-setup.mjs";
+test("production helper resolves the installed Wrangler CLI through its exported package metadata",()=>{
+  const cli=wranglerCli();assert.ok(existsSync(cli));assert.ok(cli.endsWith("wrangler.js"));
+});
 test("admin keys require a long header-safe secret and never occur in errors",()=>{
   for(const key of ["short"," ".repeat(32),"x".repeat(129),"x".repeat(32)+"\n", "☁".repeat(32)])assert.throws(()=>adminDigest(key),error=>!error.message.includes(key));
   assert.equal(adminDigest("x".repeat(32)),"c62e4615bd39e222572f3a1bf7c2132ea1e65b17ec805047bd6b2842c593493f");
