@@ -20,7 +20,7 @@ import { formatBytes } from "./lib/format";
 import { routeUrl, isFolderView, type Screen } from "./lib/routes";
 
 type Selection = { file: PublicDownload; entry?: FileEntry };
-const pageTitles: Partial<Record<Screen, string>> = { progress: "Add Link", storage: "Storage", settings: "Settings", about: "About LinkBox" };
+const pageTitles: Partial<Record<Screen, string>> = { progress: "Add Link", storage: "Storage", "storage-full": "Storage full", settings: "Settings", about: "About LinkBox" };
 
 function App() {
   const { downloads, storage, loading, error, refresh, setDownloads } = useDownloads();
@@ -30,8 +30,6 @@ function App() {
   const [deleteTarget,setDeleteTarget]=useState<PublicDownload|null>(null);
   const [deleteBusy,setDeleteBusy]=useState(false),[deleteError,setDeleteError]=useState("");
   const [storageFull, setStorageFull] = useState<ApiError | null>(null);
-  const [pendingMagnet, setPendingMagnet] = useState("");
-  const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [contents, setContents] = useState<FileContents | null>(null);
   const [contentsError, setContentsError] = useState("");
@@ -111,22 +109,6 @@ function App() {
       setActions(null);
     } catch (cause) { if (!(cause instanceof DOMException && cause.name === "AbortError")) setNotice("Sharing is unavailable. Copy the page address from your browser."); }
   };
-  const freeAndContinue = async (ids: string[]) => {
-    setBusy(true);
-    try {
-      for (const id of ids) await api.cleanup(id);
-      await refresh();
-      if (pendingMagnet) {
-        const file = await api.create(pendingMagnet);
-        setStorageFull(null); setPendingMagnet(""); add(file);
-      } else navigate("files");
-    } catch (cause) {
-      const problem = cause as ApiError;
-      if (problem.code === "storage_full") setStorageFull(problem);
-      setNotice(problem.error ?? "Unable to free space. Try again.");
-      await refresh();
-    } finally { setBusy(false); }
-  };
   const list = (files: PublicDownload[], compact = false) => loading ? <FileLoading/> : files.length ? <div className="file-list">{files.map(file => <FileRow key={file.id} file={file} compact={compact} onOpen={() => open(file)} onMore={() => setActions({ file })} onDownload={() => void download(file)}/>)}</div> : error ? null : <EmptyState/>;
   const rootScreen = route.screen === "home" || route.screen === "files";
   const title = pageTitles[route.screen] ?? entry?.displayName ?? current?.displayName ?? "";
@@ -135,7 +117,7 @@ function App() {
 
   let page;
   if (route.screen === "home") page = <>
-    <div className="home-hero"><Brand large/></div><MagnetForm onCreated={add} onStorageFull={(problem, magnet) => { setStorageFull(problem); setPendingMagnet(magnet); navigate("storage-full"); }}/>
+    <div className="home-hero"><Brand large/></div><MagnetForm onCreated={add} onStorageFull={problem => { setStorageFull(problem); navigate("storage-full"); }}/>
     <section className="recent-files"><div className="section-heading"><h2>Recent Files</h2><button className="text-button" onClick={() => navigate("files")}>See all</button></div>{list(activeFiles.slice(0, 4), true)}</section>
   </>;
   else if (route.screen === "files") page = <>
@@ -145,7 +127,7 @@ function App() {
   else if (route.screen === "storage") page = <section className="storage-page"><StorageCard storage={storage} onRefresh={() => void refresh()}/><div className="storage-stats">{([["Total Storage", storage?.capacityBytes], ["Used Storage", storage?.usedBytes], ["Available", storage?.availableBytes]] as const).map(([label, bytes]) => <div key={label}><BrandIcon name="storage" size={17}/><span>{label}</span><strong>{bytes === undefined ? "—" : formatBytes(bytes)}</strong></div>)}</div><div className="storage-counts"><p><BrandIcon name="add" size={17}/><span>Active downloads</span><strong>{downloading.length}</strong></p><p><BrandIcon name="check" size={17}/><span>Ready files</span><strong>{ready.length}</strong></p></div></section>;
   else if (route.screen === "settings") page = <SettingsPage go={navigate}/>;
   else if (route.screen === "about") page = <AboutPage section={route.section}/>;
-  else if (route.screen === "storage-full") page = storageFull ? <StorageFullPage error={storageFull} busy={busy} onContinue={ids => void freeAndContinue(ids)} onCancel={() => navigate("home")}/> : <UnavailablePage onFiles={() => navigate("files")} message="No pending download needs storage cleanup."/>;
+  else if (route.screen === "storage-full") page = storageFull ? <StorageFullPage error={storageFull} onFiles={() => navigate("files")} onCancel={() => navigate("home")}/> : <UnavailablePage onFiles={() => navigate("files")} message="No pending storage request."/>;
   else if (fileScreen && loading) page = <FileLoading/>;
   else if (missing || route.screen === "unavailable") page = <UnavailablePage onFiles={() => navigate("files")}/>;
   else if (current && route.screen === "progress") page = <ProgressPage file={current} onClose={() => navigate("files")} onDelete={()=>requestDelete(current)}/>;

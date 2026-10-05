@@ -4,7 +4,7 @@ A mobile-first temporary shared-download app using the approved LinkBox assets. 
 
 ## Current status
 
-LinkBox V1 supports real magnet submission, progress, folder browsing, HLS/native media playback, direct file downloads, community cleanup after 3 hours, and automatic expiry after 24 hours. The approved UI remains unchanged. Your single account uses its **actual Seedr quota**, not the 9.5 GB demo pool. Only downloads created through LinkBox are shared or cleanup-managed; existing personal Seedr files are not imported.
+LinkBox V1 supports real magnet submission, progress, folder browsing, HLS/native media playback, direct file downloads, owner-only deletion at any time, and automatic expiry after 24 hours. There is no 3-hour lock or community deletion. The approved visual design remains unchanged. Your single account uses its **actual Seedr quota**, not the 9.5 GB demo pool. Only downloads created through LinkBox are shared or cleanup-managed; existing personal Seedr files are not imported.
 
 **Supabase is no longer used.** Cloudflare Pages serves the frontend, Workers runs the privileged API, **D1 stores metadata**, and Worker Cron Triggers schedule cleanup. Actual downloaded files stay exclusively on Seedr. No media is stored in Pages, Workers, D1, GitHub or an R2 bucket.
 
@@ -25,7 +25,7 @@ Pages provides a static frontend without a running server. Workers keeps tokens 
 apps/web/                    React, Vite, TypeScript, Tailwind and brand assets
 apps/worker/src/database/    D1 implementation; in-memory mock implementation
 apps/worker/src/seedr/       Mock/live adapters, verified PAT API and ownership checks
-apps/worker/src/cleanup/     Shared community/automatic cleanup logic
+apps/worker/src/cleanup/     Owner deletion and automatic expiry logic
 apps/worker/migrations/      Active Cloudflare D1 SQLite migrations
 apps/worker/wrangler.toml    Local/production D1 bindings, vars and hourly Cron
 packages/shared/            Public API types (no tokens or internal account IDs)
@@ -84,8 +84,8 @@ Use this synthetic hash only in mock mode. Mock downloads are labelled text fixt
 - The 9.5 GB logical pool exists only in the original two-account mock configuration.
 - An entire item must fit one account; combined free space is never treated as contiguous.
 - Known-size account selection uses best fit. Seedr has no documented size-only magnet preflight: unknown-size tasks choose the account with most free space, one transferring item per account, and rely on Seedr to reject an item that cannot fit. `xl` is never trusted. After metadata resolves, oversized app-owned content is stopped/removed and marked failed. Exact requested/free/shortfall numbers are shown only when size is known; unknown-size errors say metadata is pending.
-- First 3 hours: protected. At 3 hours: cleanup eligible. At 24 hours: automatic deletion due.
-- Community cleanup is offered when storage is needed, not as encouragement to delete randomly.
+- Owners can delete their own downloads immediately, with the existing confirmation. Other visitors cannot manually delete them at any age. At 24 hours, automatic deletion is due.
+- When storage is full, open Files to delete your own items or wait for expiration. The former community `POST /api/downloads/:id/cleanup` endpoint is removed (404 in full/mock mode); old clients cannot bypass ownership through it.
 - D1 enforces lifecycle timestamps, foreign keys, status/progress constraints and active-magnet uniqueness.
 - One conditional SQL `UPDATE … RETURNING` atomically claims cleanup across Worker instances.
 - Progress updates cannot undo claims or resurrect deleted records.
@@ -93,6 +93,8 @@ Use this synthetic hash only in mock mode. Mock downloads are labelled text fixt
 - Hourly Cron selects up to 8 expired records. Normal cleanup occurs within approximately one cycle after 24 hours; outages may delay removal. Expired playback/download access is blocked immediately even before physical removal.
 
 D1 stores only account metadata and app-managed download records. User-facing API responses explicitly omit internal account IDs, remote IDs, secret references and tokens.
+
+For compatibility with already-applied migrations, the legacy `cleanup_allowed_at` column and its historical constraint remain populated internally. They no longer control any operation and are omitted from public API responses. No destructive table rebuild or new migration is needed. Automatic claims require `expires_at <= now`; manual claims require the matching owner digest.
 
 ## Cloudflare D1 setup
 
@@ -195,9 +197,9 @@ Task/folder mapping, temporary delivery and ownership-scoped deletion were verif
 
 For newly submitted downloads, open the file's menu (⋮) and choose **Delete my download**, or use that option on its progress page. Confirming stops the task and deletes the entire LinkBox-managed download, including its folder contents and shared access. This is permanent, not an undo/trash feature.
 
-Only the originating browser can use `POST /api/downloads/:id/delete`, including within the first three hours. A random browser UUID is a private bearer capability; D1 stores only its SHA-256 digest (`0004_download_owner.sql`). Responses include a request-specific `canDelete` boolean, never the UUID or digest. Do not share this browser session value. Clearing browser storage, switching browsers/devices, or losing that value loses immediate-delete authority. Historical records have no trustworthy owner and are deliberately not claimed retroactively; they retain normal community cleanup and expiration.
+Only the originating browser can use `POST /api/downloads/:id/delete`, at any time without an age lock. A random browser UUID is a private bearer capability; D1 stores only its SHA-256 digest (`0004_download_owner.sql`). Responses include a request-specific `canDelete` boolean, never the UUID or digest. Do not share this browser session value. Clearing browser storage, switching browsers/devices, or losing that value loses manual-delete authority. Historical records have no trustworthy owner and are deliberately not claimed retroactively; automatic expiration still applies.
 
-The Worker verifies ownership and atomically claims deletion in D1. Repeated owner requests are idempotent, competing requests do not double-delete, failed provider deletion remains retryable, and deletion is blocked while a submission is still being admitted/checkpointed. Other browsers still cannot delete protected files before three hours. No login, paid service, new Seedr endpoint, or account-wide deletion is introduced.
+The Worker verifies ownership and atomically claims deletion in D1. Repeated owner requests are idempotent, competing requests do not double-delete, failed provider deletion remains retryable, and deletion is blocked while a submission is still being admitted/checkpointed. Other browsers cannot manually delete someone else's download, before or after three hours. No login, paid service, new Seedr endpoint, or account-wide deletion is introduced.
 
 - API Console's **endpoint form** documents `POST /tasks` JSON fields `torrent_magnet` and `folder_id`. Its generic code example uses obsolete `url` / `save_folder_id`; those returned HTTP 422 and are not used.
 - `POST /fs/folder` uses `name` / `parent_id`. The task's `folder_id` must match the isolated parent; completed content is traversed only beneath that parent. IDs are not interchangeable.
@@ -235,7 +237,7 @@ npm test
 npm run build
 ```
 
-Tests include existing mock API/business coverage, private-token setup, and real SQLite execution of the D1 schema/queries: account upserts, constraints, injection-safe bindings, 3-hour/24-hour boundaries, duplicate prevention, concurrent cleanup, stale progress, failed cleanup retry and idempotent expiry. SQLite tests do not replace Wrangler-runtime and credential-dependent end-to-end tests.
+Tests include existing mock API/business coverage, private-token setup, and real SQLite execution of the D1 schema/queries: account upserts, constraints, injection-safe bindings, owner deletion without an age lock, removed community routes, exact 24-hour expiry, duplicate prevention, concurrent cleanup, stale progress, failed cleanup retry and idempotent expiry. SQLite tests do not replace Wrangler-runtime and credential-dependent end-to-end tests.
 
 ## Troubleshooting
 

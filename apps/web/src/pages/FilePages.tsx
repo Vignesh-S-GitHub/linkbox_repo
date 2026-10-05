@@ -44,8 +44,8 @@ const guidePages = [
   ["Playback", "Press play", "Ready, supported media opens in the player. Playback support depends on the connected storage provider."],
   ["Downloads", "Keep what you need", "Download before the temporary storage period ends. LinkBox does not provide permanent backups."],
   ["Storage", "Your connected capacity", "The Storage page shows the connected capacity. One file must fit in a single account; capacity cannot be pooled for one download."],
-  ["Protection", "The first three hours", "New items cannot be deleted by community cleanup during their first three hours."],
-  ["Free space", "Cleanup when needed", "After three hours, items become eligible for cleanup. Confirm carefully: clearing a file removes access for everyone."],
+  ["Delete a download", "Added the wrong link?", "Use Delete my download from the same browser that added it, at any time. Confirm carefully: deletion is permanent and removes shared access."],
+  ["Free space", "Your files, your choice", "Delete your own downloads to make room, or wait for automatic expiration after 24 hours. Other users’ downloads cannot be deleted manually."],
   ["Expiration", "Temporary by design", "Files expire after 24 hours. Scheduled removal runs hourly. Download anything you need in time."],
   ["Important", "Use responsibly", "Only add files you are authorized to access. This guide is a synthetic mock preview, not a file retrieved from Seedr."],
 ];

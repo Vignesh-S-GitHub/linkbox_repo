@@ -5,7 +5,7 @@ const { DatabaseSync } = require("node:sqlite");
 const { D1MetadataDatabase } = require("./logic-test-build/apps/worker/src/database/d1-database.js");
 const { databaseFor } = require("./logic-test-build/apps/worker/src/database/factory.js");
 const worker = require("./logic-test-build/apps/worker/src/index.js").default;
-const { deleteCommunityItem, deleteOwnedItem, expireDueItems } = require("./logic-test-build/apps/worker/src/cleanup/cleanup-service.js");
+const { deleteOwnedItem, expireDueItems } = require("./logic-test-build/apps/worker/src/cleanup/cleanup-service.js");
 
 // Real SQLite executes the SAME migration/statements behind a small D1 binding
 // facade. No remote account, secrets, media or helper subprocesses are involved.
@@ -50,7 +50,7 @@ function setup() {
 const tests = [];
 const test = (name, run) => tests.push([name, run]);
 
-test("owner-only D1 deletion bypasses protection atomically, not for strangers or legacy items",async()=>{
+test("owner-only D1 deletion is immediate and atomic, not for strangers or legacy items",async()=>{
  const {sqlite,db}=setup();try{await db.syncAccounts([account]);const owner="a".repeat(64),other="b".repeat(64);
  const row=await db.create(fixture(1,{ownerSessionHash:owner,status:"downloading"}));
  assert.equal(await db.claimForCleanup(row.publicId,now),null);assert.equal(await db.claimForCleanup(row.publicId,now,other),null);
@@ -177,33 +177,35 @@ test("D1 enforces active magnet uniqueness and lifecycle/FK constraints", async 
     assert.equal((await db.listActive()).length, 1);
   } finally { sqlite.close(); }
 });
-test("D1 protection lasts exactly 3h; expiry selects exactly 24h", async () => {
+test("D1 automatic claims and expiry begin exactly at 24h, not 3h", async () => {
   const { sqlite, db } = setup();
   try {
-    await db.syncAccounts([account]); const protectedRow = await db.create(fixture(2));
-    assert.equal(await db.claimForCleanup(protectedRow.publicId, now), null);
-    const boundary = await db.create(fixture(3));
-    assert.equal((await db.claimForCleanup(boundary.publicId, now)).status, "deleting");
-    await db.create(fixture(23.999)); const expired = await db.create(fixture(24));
+    await db.syncAccounts([account]);
+    for (const hours of [0, 2, 3, 4, 23.999]) {
+      const row = await db.create(fixture(hours));
+      assert.equal(await db.claimForCleanup(row.publicId, now), null);
+    }
+    const expired = await db.create(fixture(24));
     assert.deepEqual((await db.listExpired(now)).map(row => row.id), [expired.id]);
+    assert.equal((await db.claimForCleanup(expired.publicId, now)).status, "deleting");
   } finally { sqlite.close(); }
 });
 test("D1 concurrent cleanup calls delete remotely once", async () => {
   const { sqlite, db, binding } = setup();
   try {
-    await db.syncAccounts([account]); const row = await db.create(fixture(4)); let calls = 0;
+    await db.syncAccounts([account]); const row = await db.create(fixture(24)); let calls = 0;
     const adapter = { async deleteItem() { calls++; } };
-    const results = await Promise.all([deleteCommunityItem(db, adapter, row.publicId, now),
-      deleteCommunityItem(new D1MetadataDatabase(binding), adapter, row.publicId, now)]);
-    assert.equal(calls, 1); assert.equal(results.filter(Boolean).length, 1);
-    assert.equal((await db.findByPublicId(row.publicId)).status, "deleted");
-    assert.equal(await deleteCommunityItem(db, adapter, row.publicId, now), null);
+    const results = await Promise.all([expireDueItems(db, adapter, now),
+      expireDueItems(new D1MetadataDatabase(binding), adapter, now)]);
+    assert.equal(calls, 1); assert.equal(results.reduce((sum, count) => sum + count, 0), 1);
+    assert.equal((await db.findByPublicId(row.publicId)).status, "expired");
+    assert.equal(await expireDueItems(db, adapter, now), 0);
   } finally { sqlite.close(); }
 });
 test("D1 stale progress cannot undo a cleanup claim or resurrect deletion", async () => {
   const { sqlite, db } = setup();
   try {
-    await db.syncAccounts([account]); const stale = await db.create(fixture(4));
+    await db.syncAccounts([account]); const stale = await db.create(fixture(24));
     const claimed = await db.claimForCleanup(stale.publicId, now);
     assert.equal((await db.update({ ...stale, progress: 50 })).status, "deleting");
     await db.update({ ...claimed, status: "deleted", deletedAt: now });
@@ -215,21 +217,22 @@ test("D1 stale progress cannot undo a cleanup claim or resurrect deletion", asyn
 test("D1 remote cleanup failure releases only its own claim for retry", async () => {
   const { sqlite, db } = setup();
   try {
-    await db.syncAccounts([account]); const row = await db.create(fixture(4));
-    await assert.rejects(deleteCommunityItem(db, { async deleteItem() { throw new Error("outage"); } }, row.publicId, now));
+    await db.syncAccounts([account]); const row = await db.create(fixture(4, {ownerSessionHash:"a".repeat(64)}));
+    await assert.rejects(deleteOwnedItem(db, { async deleteItem() { throw new Error("outage"); } }, row.publicId, now, row.ownerSessionHash));
     const restored = await db.findByPublicId(row.publicId);
     assert.equal(restored.status, "ready"); assert.equal(restored.cleanupClaimedAt, null);
-    assert.equal((await deleteCommunityItem(db, { async deleteItem() {} }, row.publicId, now)).status, "deleted");
+    assert.equal((await deleteOwnedItem(db, { async deleteItem() {} }, row.publicId, now, row.ownerSessionHash)).status, "deleted");
   } finally { sqlite.close(); }
 });
-test("D1 repeated expiration is idempotent and preserves protected files", async () => {
+test("D1 repeated expiration is idempotent and preserves all unexpired files", async () => {
   const { sqlite, db } = setup();
   try {
-    await db.syncAccounts([account]); await db.create(fixture(24)); const protectedRow = await db.create(fixture(2));
+    await db.syncAccounts([account]); await db.create(fixture(24)); const unexpired = [];
+    for (const hours of [2, 3, 4, 23.999]) unexpired.push(await db.create(fixture(hours)));
     let calls = 0; const adapter = { async deleteItem() { calls++; } };
     assert.equal(await expireDueItems(db, adapter, now), 1);
     assert.equal(await expireDueItems(db, adapter, now), 0); assert.equal(calls, 1);
-    assert.equal((await db.findByPublicId(protectedRow.publicId)).status, "ready");
+    for (const row of unexpired) assert.equal((await db.findByPublicId(row.publicId)).status, "ready");
   } finally { sqlite.close(); }
 });
 test("D1 raw provider errors never appear in public database errors", async () => {

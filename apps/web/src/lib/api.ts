@@ -13,7 +13,6 @@ export const api = {
   storage: () => request<StorageSummary>("/api/storage"),
   downloads: () => request<PublicDownload[]>("/api/downloads"),
   create: (magnet: string) => request<PublicDownload>("/api/downloads", { method: "POST", body: JSON.stringify({ magnet }) }),
-  cleanup: (id: string) => request<PublicDownload>(`/api/downloads/${id}/cleanup`, { method: "POST" }),
   deleteOwn: (id: string) => request<PublicDownload>(`/api/downloads/${encodeURIComponent(id)}/delete`, { method: "POST" }),
   contents: (id: string) => request<FileContents>(`/api/downloads/${encodeURIComponent(id)}/contents`),
   delivery: (id: string, action: "play" | "download", entryId?: string) => request<{ url: string }>(`/api/downloads/${encodeURIComponent(id)}/${action}?format=json${entryId ? `&entry=${encodeURIComponent(entryId)}` : ""}`),

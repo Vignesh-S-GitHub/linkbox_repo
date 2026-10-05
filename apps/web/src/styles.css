@@ -200,16 +200,9 @@ input[type="radio"],input[type="checkbox"] { accent-color:var(--lb-primary); wid
 .need-space { margin:17px 0; font-size:12px; }
 .clear-card { border:1px solid var(--lb-border); border-radius:12px; padding:13px; text-align:left; background:var(--lb-bg); }
 .clear-card h2 { font-size:12px; display:flex; align-items:center; gap:8px; margin-bottom:8px; }
-.cleanup-option { display:flex; gap:11px; align-items:center; min-height:64px; cursor:pointer; }
-.cleanup-option>span { flex:1; min-width:0; }
-.cleanup-option strong { font-size:12px; font-weight:500; display:block; overflow-wrap:anywhere; }
-.cleanup-option small { display:block; font-size:11px; }
-.cleanup-warning { text-align:left; font-size:11px; color:var(--lb-muted); line-height:1.6; margin:16px 2px; }
+.clear-card p { font-size:12px; line-height:1.7; margin:8px 0; }
+.full-page>.primary { margin-top:16px; }
 .full-page>.secondary { margin-top:8px; }
-.protected-list { font-size:12px; text-align:left; margin-top:15px; color:var(--lb-muted); }
-.protected-list summary { padding:10px 0; cursor:pointer; }
-.protected-list p { padding:9px 0; }
-.protected-list small { display:block; }
 .document-stage { background:var(--lb-bg); padding:25px 25px 14px; }
 .guide-page { min-height:425px; max-width:340px; margin:auto; padding:29px 24px 120px; position:relative; overflow:hidden; background:#fff; color:#071A3A; box-shadow:0 7px 23px rgba(27,76,150,.1); border-radius:3px; }
 .guide-brand { display:flex; justify-content:flex-end; margin-bottom:39px; }

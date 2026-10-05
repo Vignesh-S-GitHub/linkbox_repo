@@ -1,8 +1,8 @@
-import type { ApiError, StorageFullFile, StorageSummary } from "@temporary-share/shared";
+import type { ApiError, StorageSummary } from "@temporary-share/shared";
 import { accountsFromEnv, maxActiveDownloads, maxFileBytes } from "./config";
 import { databaseFor } from "./database/factory";
 import type { Database } from "./database/database";
-import { deleteCommunityItem, deleteOwnedItem, expireDueItems } from "./cleanup/cleanup-service";
+import { deleteOwnedItem, expireDueItems } from "./cleanup/cleanup-service";
 import { LiveSeedrAdapter } from "./seedr/live-adapter";
 import { MockSeedrAdapter } from "./seedr/mock-adapter";
 import type { SeedrAdapter } from "./seedr/adapter";
@@ -41,10 +41,6 @@ async function storageSnapshot(database: Database, adapter: SeedrAdapter, env: E
   if (cached.length === configured.length && cached.every(account => configured.some(value => value.id === account.id) && Date.now() - Date.parse(account.lastSyncedAt) < 60000)) return toStorage(cached);
   const accounts = await adapter.syncAccounts(); await database.syncAccounts(accounts); return toStorage(accounts);
 }
-function eligibleFiles(rows: DownloadRow[], now: string): StorageFullFile[] {
-  return rows.filter(row => !row.deletedAt && row.status !== "deleting").map(row => ({ id: row.publicId, displayName: row.displayName, sizeBytes: row.sizeBytes,
-    createdAt: row.createdAt, cleanupAllowedAt: row.cleanupAllowedAt, protected: row.cleanupAllowedAt > now }));
-}
 async function refreshRows(database: Database, adapter: SeedrAdapter, env: Env) {
   const rows = await database.listActive();
   const result: DownloadRow[] = []; let refreshed = 0;
@@ -65,7 +61,7 @@ async function refreshRows(database: Database, adapter: SeedrAdapter, env: Env) 
       const item = await adapter.getItem(row.seedrAccountId, row.seedrItemId);
       if (item.sizeBytes > maxFileBytes(env)) {
         // Provider resolves size after acceptance. Policy rejects oversized owned
-        // content; community protection does not authorize retaining an unsafe task.
+        // content without retaining an unsafe task.
         await adapter.deleteItem(row.seedrAccountId, item.itemId);
         result.push(await database.update({ ...row, seedrItemId: item.itemId, sizeBytes: item.sizeBytes, status: "failed", playable: false,
           errorMessage: "This file exceeds the supported size limit and was removed." }));
@@ -119,14 +115,13 @@ async function createDownload(request: Request, env: Env) {
     const candidates = accounts.filter(account => !active.some(row => row.seedrAccountId === account.id && ["queued", "fetching_metadata", "downloading", "processing"].includes(row.status)));
     const account = requested === null ? candidates.filter(value => value.availableBytes > 0).sort((a, b) => b.availableBytes - a.availableBytes)[0] : selectAccount(candidates, requested);
     if (!account) {
-      const files = eligibleFiles(active, new Date().toISOString());
       throw new ApiProblem(409, "storage_full", candidates.length ? "Not enough space in one account." : "A transfer is already using the available account. Wait for it to finish before adding another.", {
         requestedBytes: requested ?? undefined, availableBytes: Math.max(0, ...candidates.map(value => value.availableBytes)),
-        eligibleFiles: files.filter(file => !file.protected), protectedFiles: files.filter(file => file.protected),
       });
     }
     await rateLimit(database, request, env, "submit");
     const created = new Date(), publicId = crypto.randomUUID();
+    // Retained solely for the existing D1 schema constraint; no 3-hour policy uses this value.
     let row: DownloadRow = { id: crypto.randomUUID(), publicId, seedrAccountId: account.id, seedrItemId: `linkbox:${publicId}:0:0`, magnetHash: hash,
       displayName: "New shared download", sizeBytes: requested ?? 0, status: "queued", progress: 0, createdAt: created.toISOString(),
       cleanupAllowedAt: new Date(+created + 10800000).toISOString(), expiresAt: new Date(+created + 86400000).toISOString(),
@@ -171,7 +166,7 @@ async function appFetch(request: Request, env: Env): Promise<Response> {
     if (path === "/api/storage" && request.method === "GET") return json(await storageSnapshot(database, adapter, env), 200, headers);
     if (path === "/api/downloads" && request.method === "GET") return json((await refreshRows(database, adapter, env)).map(safeDownload), 200, headers);
     if (path === "/api/downloads" && request.method === "POST") return json(await createDownload(request, env), 201, headers);
-    const match = /^\/api\/downloads\/([0-9a-f-]+)(?:\/(cleanup|delete|play|download|contents))?$/i.exec(path);
+    const match = /^\/api\/downloads\/([0-9a-f-]+)(?:\/(delete|play|download|contents))?$/i.exec(path);
     if (!match) throw new ApiProblem(404, "not_found", "This download does not exist.");
     const [, publicId, action] = match, row = await database.findByPublicId(publicId);
     if (!row) throw new ApiProblem(404, "not_found", "This download does not exist.");
@@ -190,15 +185,6 @@ async function appFetch(request: Request, env: Env): Promise<Response> {
         try{await database.syncAccounts(await adapter.syncAccounts());}catch{console.warn("Storage refresh will retry after deletion");}
         return json(safeDownload(updated),200,headers);
       }finally{await database.releaseLease("submission",lock);}
-    }
-    if (action === "cleanup" && request.method === "POST") {
-      if (row.deletedAt) return json(safeDownload(row), 200, headers);
-      if (row.cleanupAllowedAt > new Date().toISOString()) throw new ApiProblem(409, "cleanup_protected", "This file is protected from cleanup for its first 3 hours.");
-      await rateLimit(database, request, env, `cleanup:${publicId}`);
-      const updated = await deleteCommunityItem(database, adapter, publicId, new Date().toISOString());
-      if (!updated) throw new ApiProblem(409, "cleanup_protected", "This file is protected from cleanup or is already being deleted.");
-      await database.syncAccounts(await adapter.syncAccounts());
-      return json(safeDownload(updated), 200, headers);
     }
     if (request.method !== "GET") throw new ApiProblem(405, "method_not_allowed", "Method not allowed.");
     if (row.deletedAt || row.expiresAt <= new Date().toISOString()) throw new ApiProblem(410, "file_unavailable", "This file is no longer available in LinkBox.");
