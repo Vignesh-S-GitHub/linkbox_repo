@@ -9,6 +9,7 @@ const { SeedrTokenClient, parseQuota } = require("./logic-test-build/apps/worker
 const { parseRoute, routeUrl, screenNames, isFolderView } = require("./logic-test-build/apps/web/src/lib/routes.js");
 const worker = require("./logic-test-build/apps/worker/src/index.js").default;
 const {downloadKind,formatProgress}=require("./logic-test-build/packages/shared/src/file-kind.js");
+const {canCopyDownloadLink,copyDownloadLink}=require("./logic-test-build/apps/web/src/lib/download-link.js");
 
 const gib = 1024 ** 3;
 const accounts = () => [
@@ -25,6 +26,46 @@ const makeRow = (createdAt, publicId = "public") => ({
 const adapter = { deleteItem: async () => undefined };
 const tests = [];
 const test = (name, fn) => tests.push([name, fn]);
+
+test("direct link copying requires a ready unexpired individual file",()=>{
+ const now=Date.now(),file={status:"ready",deletedAt:null,expiresAt:new Date(now+60000).toISOString(),kind:"video",displayName:"Demo.mp4"};
+ assert.equal(canCopyDownloadLink(file,undefined,now),true);
+ for(const status of ["downloading","processing","failed","deleted","expired"])assert.equal(canCopyDownloadLink({...file,status},undefined,now),false);
+ assert.equal(canCopyDownloadLink({...file,deletedAt:new Date(now).toISOString()},undefined,now),false);
+ assert.equal(canCopyDownloadLink({...file,expiresAt:new Date(now).toISOString()},undefined,now),false);
+ assert.equal(canCopyDownloadLink({...file,expiresAt:"invalid"},undefined,now),false);
+ assert.equal(canCopyDownloadLink({...file,kind:"folder"},undefined,now),false);
+ assert.equal(canCopyDownloadLink({...file,kind:"folder"},{kind:"video"},now),true);
+ assert.equal(canCopyDownloadLink({...file,displayName:"LICENSE",kind:"other"},undefined,now),true);
+});
+test("direct clipboard fallback copies the exact delivery URL rather than the app page",async()=>{
+ const url="https://cdn.seedr.cc/direct/demo.mp4?temporary=fixture",writes=[];
+ await copyDownloadLink(async()=>url,{writeText:async text=>{writes.push(text);}},undefined);
+ assert.deepEqual(writes,[url]);
+});
+test("promise clipboard starts during the gesture before delivery resolves",async()=>{
+ let finish,started=false,result;const url="https://cdn.seedr.cc/direct/demo.mp4?temporary=fixture";
+ class Item{constructor(parts){this.parts=parts;}}
+ const pending=copyDownloadLink(()=>new Promise(resolve=>{finish=resolve;}),{writeText:()=>assert.fail("must use promise clipboard"),write:async items=>{started=true;result=await(await items[0].parts["text/plain"]).text();}},Item);
+ assert.equal(started,true);finish(url);await pending;assert.equal(result,url);
+});
+test("clipboard and expired delivery failures never report successful copying",async()=>{
+ const failure=new Error("delivery unavailable");let writes=0;
+ await assert.rejects(copyDownloadLink(async()=>{throw failure;},{writeText:async()=>{writes++;}},undefined),failure);assert.equal(writes,0);
+ await assert.rejects(copyDownloadLink(()=>assert.fail("must not load without clipboard"),null,undefined));
+ class Item{constructor(parts){this.parts=parts;}}
+ await assert.rejects(copyDownloadLink(async()=>{throw failure;},{writeText:async()=>{},write:async()=>{throw new Error("permission denied");}},Item),/permission denied/);
+});
+test("file actions use original delivery with scoped entry and only one owner Delete",()=>{
+ const fs=require("node:fs"),path=require("node:path");
+ const app=fs.readFileSync(path.join(__dirname,"../../web/src/App.tsx"),"utf8");
+ const sheet=fs.readFileSync(path.join(__dirname,"../../web/src/components/ActionsSheet.tsx"),"utf8");
+ assert.match(app,/copyDownloadLink\(\(\) => api\.delivery\(file\.id, "download", child\?\.id\)/);
+ assert.match(sheet,/Copy download link/);assert.match(sheet,/!entry&&file\.canDelete/);
+ assert.equal((sheet.match(/onClick=\{onDelete\}/g)||[]).length,1);
+ assert.ok(!sheet.includes("Not available")&&!sheet.includes("Delete my download")&&!app.includes("onUnavailable="));
+ assert.match(sheet,/<Trash2 size=\{19\}\/>Delete/);
+});
 
 test("authoritative type overrides names, including folders ending in media extensions",()=>{
  assert.equal(downloadKind({displayName:"Demo.2026 [5.1]",kind:"folder"}),"folder");

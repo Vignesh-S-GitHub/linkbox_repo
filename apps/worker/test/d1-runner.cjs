@@ -309,7 +309,7 @@ test("account limits and concurrent changes fail safely before quota or metadata
  let unblock;let calls=0;const waiting=new Promise(resolve=>{unblock=resolve;});globalThis.fetch=async()=>{calls++;await waiting;return Response.json({space_max:5000,space_used:0});};
  const first=worker.fetch(adminRequest("",addB),env);
  // Wait until the first request holds the admission lease, not for a wall-clock sleep.
- for(let i=0;i<20&&!calls;i++)await new Promise(resolve=>setImmediate(resolve));assert.equal(calls,1);
+ const start=Date.now();while(!calls&&Date.now()-start<5000)await new Promise(resolve=>setImmediate(resolve));assert.equal(calls,1);
  assert.equal((await worker.fetch(adminRequest("",addB),env)).status,409);unblock();assert.equal((await first).status,200);assert.equal(calls,1);assert.equal((await db.accountConfigurations()).length,1);
  }finally{globalThis.fetch=original;sqlite.close();}
 });

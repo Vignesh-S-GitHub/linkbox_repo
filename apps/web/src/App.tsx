@@ -18,6 +18,7 @@ import { useDownloads } from "./hooks/useDownloads";
 import { useNavigation } from "./hooks/useNavigation";
 import { api } from "./lib/api";
 import { formatBytes } from "./lib/format";
+import { copyDownloadLink } from "./lib/download-link";
 import { routeUrl, isFolderView, type Screen } from "./lib/routes";
 
 type Selection = { file: PublicDownload; entry?: FileEntry };
@@ -102,10 +103,15 @@ function App() {
     const kind = child?.kind ?? downloadKind(file);
     return new URL(routeUrl(kind === "folder" ? "folder" : (child?.playable ?? file.playable) ? "player" : "preview", file.id, child?.id), location.origin).href;
   };
-  const share = async (file: PublicDownload, child?: FileEntry, copy = false) => {
+  const copyDirectLink = async (file: PublicDownload, child?: FileEntry) => {
+    await copyDownloadLink(() => api.delivery(file.id, "download", child?.id).then(result => result.url));
+    setActions(null);
+    setNotice("Download link copied. Paste it into your external player. Temporary link — keep it private.");
+  };
+  const share = async (file: PublicDownload, child?: FileEntry) => {
     try {
       const url = shareUrl(file, child);
-      if (!copy && navigator.share) await navigator.share({ title: child?.displayName ?? file.displayName, url });
+      if (navigator.share) await navigator.share({ title: child?.displayName ?? file.displayName, url });
       else { await navigator.clipboard.writeText(url); setNotice("Link copied"); }
       setActions(null);
     } catch (cause) { if (!(cause instanceof DOMException && cause.name === "AbortError")) setNotice("Sharing is unavailable. Copy the page address from your browser."); }
@@ -151,7 +157,7 @@ function App() {
     </div></header>
     <div className="page-content">{error && <div className="connection-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => void refresh()}><RefreshCw size={15}/>Retry</button></div>}{page}</div>
     {rootScreen && <><button className="floating-add" onClick={() => { navigate("home"); window.setTimeout(() => document.getElementById("magnet")?.focus(), 0); }} aria-label="Add a link"><BrandIcon name="add" size={28}/></button><nav className="bottom-nav" aria-label="Bottom navigation"><button className="active" aria-current={route.screen === "files" ? "page" : undefined} onClick={() => navigate("files")}><BrandIcon name="folder" size={29}/>Files</button><button onClick={() => navigate("storage")}><BrandIcon name="storage" size={29}/>Storage</button></nav></>}
-    {actions && <ActionsSheet key={actions.file.id + (actions.entry?.id ?? "")} file={actions.file} entry={actions.entry} onClose={() => setActions(null)} onOpen={() => open(actions.file, actions.entry)} onDownload={() => void download(actions.file, actions.entry)} onShare={() => void share(actions.file, actions.entry)} onCopy={() => void share(actions.file, actions.entry, true)} onUnavailable={() => navigate("unavailable")} onDelete={()=>requestDelete(actions.file)}/>}
+    {actions && <ActionsSheet key={actions.file.id + (actions.entry?.id ?? "")} file={actions.file} entry={actions.entry} onClose={() => setActions(null)} onOpen={() => open(actions.file, actions.entry)} onDownload={() => void download(actions.file, actions.entry)} onShare={() => void share(actions.file, actions.entry)} onCopy={() => copyDirectLink(actions.file, actions.entry)} onDelete={()=>requestDelete(actions.file)}/>}
     {deleteTarget&&<DeleteDownloadSheet file={deleteTarget} busy={deleteBusy} error={deleteError} onClose={()=>setDeleteTarget(null)} onConfirm={()=>void deleteOwn()}/>}
     {notice && <div className="toast" role="status">{notice}<button onClick={() => setNotice("")} aria-label="Dismiss">×</button></div>}
   </main>;

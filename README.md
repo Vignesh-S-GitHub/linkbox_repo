@@ -222,7 +222,13 @@ Task/folder mapping, temporary delivery and ownership-scoped deletion were verif
 
 #### Delete a mistakenly added magnet
 
-For newly submitted downloads, open the file's menu (⋮) and choose **Delete my download**, or use that option on its progress page. Confirming stops the task and deletes the entire LinkBox-managed download, including its folder contents and shared access. This is permanent, not an undo/trash feature.
+For newly submitted downloads, open the file's menu (⋮) and choose the single red **Delete** action, or use that option on its progress page. Confirming stops the task and deletes the entire LinkBox-managed download, including its folder contents and shared access. This is permanent, not an undo/trash feature. There is no “Not available” menu action; unavailable files still have a real error page.
+
+### Original-quality external playback
+
+For a ready individual file, open its menu (⋮) and choose **Copy download link**. For a folder, open it first and use the video file's menu. Paste the copied URL into your external player's network-stream field; in VLC desktop use **Media → Open Network Stream → paste → Play** ([official VLC instructions](https://docs.videolan.me/vlc-user/desktop/3.0/en/basic/media.html)). This is the original-file delivery URL, not the lower-resolution HLS preview or a Seedr API/PAT authentication URL. The existing Worker download endpoint checks membership, readiness and expiry before issuing it; media remains direct from Seedr.
+
+Original resolution/audio tracks depend on the source file and your external player's codec support and connection. Copying a URL does not upscale or transcode it. Links are temporary bearer capabilities: keep them private, copy a fresh one if Seedr expires it, and download before the 24-hour deadline. **Share** still shares the LinkBox page, not this direct file URL. Clipboard failures show a safe inline error; URLs are never logged or saved to browser storage. Folder-wide archive links are not invented.
 
 Only the originating browser can use `POST /api/downloads/:id/delete`, at any time without an age lock. A random browser UUID is a private bearer capability; D1 stores only its SHA-256 digest (`0004_download_owner.sql`). Responses include a request-specific `canDelete` boolean, never the UUID or digest. Do not share this browser session value. Clearing browser storage, switching browsers/devices, or losing that value loses manual-delete authority. Historical records have no trustworthy owner and are deliberately not claimed retroactively; automatic expiration still applies.
 
