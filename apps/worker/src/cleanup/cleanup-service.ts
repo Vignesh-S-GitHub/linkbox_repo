@@ -12,7 +12,6 @@ export async function completeDeletion(database:Database,adapter:SeedrAdapter,ro
   }
   return database.update({...row,status,deletedAt:now,cleanupClaimedAt:now,errorMessage:null});
 }
-export async function deleteCommunityItem(database:Database,adapter:SeedrAdapter,publicId:string,now:string){const previous=await database.findByPublicId(publicId);const claimed=await database.claimForCleanup(publicId,now);if(!claimed)return null;return completeDeletion(database,adapter,claimed,now,"deleted",previous?.status);}
 export async function deleteOwnedItem(database:Database,adapter:SeedrAdapter,publicId:string,now:string,ownerSessionHash:string|null){
  const previous=await database.findByPublicId(publicId);
  if(!previous||!ownsDownload(previous,ownerSessionHash))throw new ApiProblem(403,"not_download_owner","Only the browser that added this download can delete it immediately.");

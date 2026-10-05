@@ -8,5 +8,6 @@ export interface Database {
  listActive():Promise<DownloadRow[]>; findByPublicId(publicId:string):Promise<DownloadRow|null>;
  findActiveByHash(hash:string):Promise<DownloadRow|null>; create(row:DownloadRow):Promise<DownloadRow>;
  update(row:DownloadRow,expectedCleanupClaim?:string|null):Promise<DownloadRow>;
+ /** With an owner digest: manual deletion at any age. Without one: expired items only. */
  claimForCleanup(publicId:string,now:string,ownerSessionHash?:string):Promise<DownloadRow|null>; listExpired(now:string):Promise<DownloadRow[]>;
 }

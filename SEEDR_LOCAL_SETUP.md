@@ -28,16 +28,16 @@ The hidden prompt checks quota, then saves the PAT only in ignored `apps/worker/
 - Task details: `GET /tasks/{id}` → `task` with `state`, `progress`, `size`, `folder_id` / `folder_created_id`. Only the isolated parent is trusted; task IDs are never treated as file IDs.
 - Contents: `GET /fs/folder/{id}/contents`, recursively bounded underneath the owned parent.
 - Direct file: `GET /download/file/{id}/url` → temporary URL; range delivery verified.
-- Video: documented `GET /presentation/fs/item/{id}/video/url` → HLS URL; HLS.js/light + native controls. Modern video route returned 400 for the test.
+- Video: documented `GET /presentation/fs/item/{id}/video/url` → HLS URL; the full lazy HLS.js build supports separate audio, with native controls only. Modern video route returned 400 for the test.
 - Deletion: `DELETE /tasks/{id}` does not delete files; `DELETE /fs/folder/{id}` removes the owned content. Both are called only after validating ownership and task association, and confirmed 404 is idempotent success.
 
 No size-only preflight is documented. Unknown-size torrents use the roomiest non-transferring account; Seedr enforces account fit, metadata later enforces the configured size cap. Do not trust `xl`. Whole-folder ZIP init request bodies are undocumented; download individual files instead. Deep folder trees, provider restrictions, unsupported browser codecs or unavailable transcoding can fail safely without a paid workaround.
 
 ## Lifetime and safety
 
-The app persists D1 admission before Seedr operations. Every item has a dedicated `LinkBox-<public UUID>` folder, with ownership checkpoints. Never rename it or move personal files into it. New items are protected for 3h, become cleanup eligible after 3h, and expire after 24h. Cleanup is mainly offered when a new submission needs storage. Cron runs hourly; stale claims recover after 5 minutes. No public admin/time-bypass endpoint exists.
+The app persists D1 admission before Seedr operations. Every item has a dedicated `LinkBox-<public UUID>` folder, with ownership checkpoints. Never rename it or move personal files into it. The originating browser can delete its download at any time after confirmation; other browsers cannot delete it manually. There is no 3-hour lock or community cleanup. Files expire after 24h. Cron runs hourly; stale claims recover after 5 minutes. No public admin/time-bypass endpoint exists.
 
-Full mode can upload submissions to Seedr and delete eligible **app-managed** files. `SEEDR_ACCESS=storage-only` is an explicit rollback switch that prevents all file actions/Cron. D1 stores no media or PAT.
+Full mode can submit to Seedr and delete **app-managed** files through owner confirmation or automatic expiration. `SEEDR_ACCESS=storage-only` is an explicit rollback switch that prevents all file actions/Cron. D1 stores no media or PAT.
 
 ## Cloudflare production
 

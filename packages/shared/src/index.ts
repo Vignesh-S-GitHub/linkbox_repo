@@ -7,7 +7,6 @@ export interface PublicDownload {
   status: DownloadStatus;
   progress: number;
   createdAt: string;
-  cleanupAllowedAt: string;
   expiresAt: string;
   deletedAt: string | null;
   errorMessage?: string;
@@ -31,5 +30,4 @@ export interface FileEntry {
 export interface FileContents { kind: FileKind; entries: FileEntry[]; preview: "guide" | null; }
 
 export interface StorageSummary { usedBytes: number; availableBytes: number; capacityBytes: number; refreshedAt: string; }
-export interface StorageFullFile { id: string; displayName: string; sizeBytes: number; createdAt: string; cleanupAllowedAt: string; protected: boolean; }
-export interface ApiError { error: string; code: string; details?: { requestedBytes?: number; availableBytes?: number; eligibleFiles?: StorageFullFile[]; protectedFiles?: StorageFullFile[] }; }
+export interface ApiError { error: string; code: string; details?: { requestedBytes?: number; availableBytes?: number }; }

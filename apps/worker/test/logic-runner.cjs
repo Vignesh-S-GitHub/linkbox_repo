@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const { selectAccount } = require("./logic-test-build/apps/worker/src/storage/account-selection.js");
 const { validateMagnet, magnetIdentity } = require("./logic-test-build/apps/worker/src/utils/magnet.js");
 const { MockDatabase } = require("./logic-test-build/apps/worker/src/database/mock-database.js");
-const { deleteCommunityItem, expireDueItems } = require("./logic-test-build/apps/worker/src/cleanup/cleanup-service.js");
+const { deleteOwnedItem, expireDueItems } = require("./logic-test-build/apps/worker/src/cleanup/cleanup-service.js");
 const { MockSeedrAdapter } = require("./logic-test-build/apps/worker/src/seedr/mock-adapter.js");
 const { LiveSeedrAdapter } = require("./logic-test-build/apps/worker/src/seedr/live-adapter.js");
 const { SeedrTokenClient, parseQuota } = require("./logic-test-build/apps/worker/src/seedr/token-client.js");
@@ -151,17 +151,24 @@ test("malformed BitTorrent hashes and control characters are rejected", () => {
 test("magnet identity ignores names and trackers and normalizes base32", () => {
   assert.equal(magnetIdentity(`magnet:?xt=urn:btih:${"0".repeat(40)}&dn=A`), magnetIdentity(`magnet:?xt=urn:btih:${"A".repeat(32)}&dn=B&tr=https://example.com`));
 });
-test("two-hour-old files are protected", async () => {
-  const db = new MockDatabase(); const now = new Date("2026-09-28T12:00:00Z"); await db.create(makeRow(new Date(now - 2 * 3600000).toISOString()));
-  assert.equal(await deleteCommunityItem(db, adapter, "public", now.toISOString()), null);
+test("automatic cleanup cannot claim any unexpired item, including after three hours", async () => {
+  const db = new MockDatabase(); const now = new Date("2026-09-28T12:00:00Z");
+  for (const hours of [0, 2, 3, 4, 23.999]) {
+    const id = `age-${hours}`; await db.create(makeRow(new Date(now - hours * 3600000).toISOString(), id));
+    assert.equal(await db.claimForCleanup(id, now.toISOString()), null);
+  }
 });
-test("four-hour-old files are cleanup eligible", async () => {
-  const db = new MockDatabase(); const now = new Date("2026-09-28T12:00:00Z"); await db.create(makeRow(new Date(now - 4 * 3600000).toISOString()));
-  assert.equal((await deleteCommunityItem(db, adapter, "public", now.toISOString()))?.status, "deleted");
+test("owners can delete at any age without a three-hour lock", async () => {
+  const db = new MockDatabase(); const now = new Date("2026-09-28T12:00:00Z"), owner = "a".repeat(64);
+  for (const hours of [0, 2, 3, 4, 23]) {
+    const id = `owned-${hours}`; await db.create({...makeRow(new Date(now - hours * 3600000).toISOString(), id), ownerSessionHash: owner});
+    await assert.rejects(deleteOwnedItem(db, adapter, id, now.toISOString(), "b".repeat(64)), error => error.code === "not_download_owner");
+    assert.equal((await deleteOwnedItem(db, adapter, id, now.toISOString(), owner)).status, "deleted");
+  }
 });
 test("one cleanup claim wins a concurrent race", async () => {
-  const db = new MockDatabase(); const now = new Date("2026-09-28T12:00:00Z"); await db.create(makeRow(new Date(now - 4 * 3600000).toISOString()));
-  const results = await Promise.all([deleteCommunityItem(db, adapter, "public", now.toISOString()), deleteCommunityItem(db, adapter, "public", now.toISOString())]);
+  const db = new MockDatabase(); const now = new Date("2026-09-28T12:00:00Z"); await db.create(makeRow(new Date(now - 24 * 3600000).toISOString()));
+  const results = await Promise.all([db.claimForCleanup("public", now.toISOString()), db.claimForCleanup("public", now.toISOString())]);
   assert.equal(results.filter(Boolean).length, 1);
 });
 test("24-hour-old files are selected for automatic expiration", async () => {
@@ -171,11 +178,12 @@ test("24-hour-old files are selected for automatic expiration", async () => {
 
 test("remote deletion failure preserves metadata and releases the claim for retry", async () => {
   const db = new MockDatabase(); const now = new Date("2026-09-28T12:00:00Z");
-  await db.create(makeRow(new Date(now - 4 * 3600000).toISOString()));
-  await assert.rejects(deleteCommunityItem(db, { deleteItem: async () => { throw new Error("offline"); } }, "public", now.toISOString()));
+  const owner = "a".repeat(64);
+  await db.create({...makeRow(new Date(now - 4 * 3600000).toISOString()), ownerSessionHash: owner});
+  await assert.rejects(deleteOwnedItem(db, { deleteItem: async () => { throw new Error("offline"); } }, "public", now.toISOString(), owner));
   const row = await db.findByPublicId("public");
   assert.equal(row.deletedAt, null); assert.equal(row.cleanupClaimedAt, null); assert.equal(row.status, "ready");
-  assert.equal((await deleteCommunityItem(db, adapter, "public", now.toISOString())).status, "deleted");
+  assert.equal((await deleteOwnedItem(db, adapter, "public", now.toISOString(), owner)).status, "deleted");
 });
 test("artifact screens and file-entry deep links round-trip", () => {
   for (const screen of screenNames) assert.equal(parseRoute(routeUrl(screen)).screen, screen);
@@ -250,9 +258,12 @@ test("Worker exposes only public metadata and correct 9.5 GB logical storage", a
   const files = await (await fetchApi("/api/downloads")).json();
   assert.equal(files.length, 5);
   assert.ok(files.every(file => !JSON.stringify(file).includes("seedrAccount") && !JSON.stringify(file).includes("seedrItem")));
+  assert.ok(files.every(file => !("cleanupAllowedAt" in file)));
 });
-test("Worker validates protected cleanup and not-ready playback", async () => {
-  assert.equal((await fetchApi(`/api/downloads/${fixtureId(1)}/cleanup`, { method: "POST" })).status, 409);
+test("removed community cleanup returns 404 and not-ready playback remains blocked", async () => {
+  for (const id of [fixtureId(1), fixtureId(2), fixtureId(3)]) {
+    for (const method of ["POST", "GET"]) assert.equal((await fetchApi(`/api/downloads/${id}/cleanup`, { method })).status, 404);
+  }
   assert.equal((await fetchApi(`/api/downloads/${fixtureId(1)}/play?format=json`)).status, 409);
 });
 test("Worker folder entries and previews are safe public capabilities", async () => {
@@ -265,18 +276,16 @@ test("Worker folder entries and previews are safe public capabilities", async ()
   assert.equal((await fetchApi(`/api/downloads/${fixtureId(2)}/download?entry=missing&format=json`)).status, 404);
   assert.equal((await fetchApi(`/api/downloads/${fixtureId(3)}/contents`)).status, 200);
 });
-test("storage-full reports largest contiguous space and cleanup retries successfully", async () => {
+test("storage-full reports contiguous space without offering other users' files for deletion", async () => {
   const magnet = `magnet:?xt=urn:btih:${"a".repeat(40)}&dn=Test%20Archive.zip&xl=${4 * gib}`;
   const rejected = await fetchApi("/api/downloads", { method: "POST", body: JSON.stringify({ magnet }) });
   assert.equal(rejected.status, 409);
   const details = (await rejected.json()).details;
   assert.equal(details.availableBytes, 1.9 * gib);
-  assert.ok(details.protectedFiles.every(file => file.protected));
-  const cleaned = await fetchApi(`/api/downloads/${fixtureId(2)}/cleanup`, { method: "POST" });
-  assert.equal(cleaned.status, 200);
-  assert.equal((await fetchApi(`/api/downloads/${fixtureId(2)}/cleanup`, { method: "POST" })).status, 200);
-  assert.equal((await fetchApi(`/api/downloads/${fixtureId(2)}/play?format=json`)).status, 410);
-  assert.equal((await fetchApi("/api/downloads", { method: "POST", body: JSON.stringify({ magnet }) })).status, 201);
+  assert.deepEqual(Object.keys(details).sort(), ["availableBytes", "requestedBytes"]);
+  assert.equal((await fetchApi(`/api/downloads/${fixtureId(2)}/cleanup`, { method: "POST" })).status, 404);
+  assert.equal((await fetchApi(`/api/downloads/${fixtureId(2)}/delete`, { method: "POST" })).status, 403);
+  assert.equal((await fetchApi("/api/downloads", { method: "POST", body: JSON.stringify({ magnet: magnet.replace(String(4 * gib), "1024") }) })).status, 201);
 });
 test("the same torrent with different display parameters is still a duplicate", async () => {
   const response = await fetchApi("/api/downloads", { method: "POST", body: JSON.stringify({ magnet: `magnet:?xt=urn:btih:${"a".repeat(40)}&dn=Different%20name&xl=1` }) });
@@ -305,7 +314,7 @@ test("Worker immediate deletion is owner-only, private, confirmed by POST and id
  assert.equal((await fetchApi(endpoint,{method:"POST",headers:{"x-session-id":""}})).status,403);
  assert.equal((await fetchApi(endpoint,{method:"GET"})).status,405);
  assert.equal((await fetchApi(endpoint,{method:"POST",headers:{origin:"https://unapproved.example"}})).status,403);
- assert.equal((await fetchApi(`/api/downloads/${file.id}/cleanup`,{method:"POST"})).status,409);
+ assert.equal((await fetchApi(`/api/downloads/${file.id}/cleanup`,{method:"POST"})).status,404);
  const deleted=await fetchApi(endpoint,{method:"POST"});assert.equal(deleted.status,200);assert.equal((await deleted.json()).status,"deleted");
  assert.equal((await fetchApi(endpoint,{method:"POST"})).status,200);
  assert.equal((await fetchApi(endpoint,{method:"POST",headers:{"x-session-id":other}})).status,403);
