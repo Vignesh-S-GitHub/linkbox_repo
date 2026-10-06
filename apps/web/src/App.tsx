@@ -17,6 +17,7 @@ import { StorageFullPage } from "./pages/StorageFullPage";
 import { useDownloads } from "./hooks/useDownloads";
 import { useNavigation } from "./hooks/useNavigation";
 import { api } from "./lib/api";
+import { readAppearance } from "./lib/browser-storage";
 import { formatBytes } from "./lib/format";
 import { copyDownloadLink } from "./lib/download-link";
 import { routeUrl, isFolderView, type Screen } from "./lib/routes";
@@ -41,7 +42,7 @@ function App() {
   const needsContents = !!current && current.status === "ready" && (route.screen === "folder" || route.screen === "preview" || !!route.entry);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = localStorage.getItem("linkbox-appearance") ?? "light";
+    document.documentElement.dataset.theme = readAppearance();
   }, []);
   useEffect(() => {
     if (!notice) return;

@@ -1,6 +1,8 @@
 {
   "name": "LinkBox",
   "short_name": "LinkBox",
+  "id": "/",
+  "scope": "/",
   "description": "Temporary shared file access.",
   "start_url": "/",
   "display": "standalone",

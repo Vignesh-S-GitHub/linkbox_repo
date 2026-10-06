@@ -12,6 +12,7 @@ export class MockDatabase implements Database { private readonly rows=new Map<st
  async cachedAccounts(includeDisabled=false){return structuredClone(this.accounts.filter(account=>includeDisabled||account.enabled));}
  constructor(){for(const row of mockRows())this.rows.set(row.id,row); }
  async listActive(){return [...this.rows.values()].filter(row=>!row.deletedAt).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).map(row=>structuredClone(row));}
+ async progressCandidates(now:number){return [...this.rows.values()].filter(row=>!row.deletedAt&&!row.cleanupClaimedAt&&Date.parse(row.expiresAt)>now&&(["queued","fetching_metadata","downloading","processing"].includes(row.status)||(row.status==="ready"&&!row.kind))&&(this.guards.get(`poll:${row.publicId}`)?.expires??0)<=now).sort((a,b)=>(this.guards.get(`poll:${a.publicId}`)?.expires??0)-(this.guards.get(`poll:${b.publicId}`)?.expires??0)||a.createdAt.localeCompare(b.createdAt)||a.publicId.localeCompare(b.publicId)).slice(0,2).map(row=>row.publicId);}
  async syncAccounts(accounts:import("../types").AccountState[]){this.accounts=structuredClone([...accounts,...this.accounts.filter(old=>!accounts.some(account=>account.id===old.id)).map(old=>({...old,enabled:false}))]);}
  async findByPublicId(id:string){const row=[...this.rows.values()].find(value=>value.publicId===id);return row?structuredClone(row):null;}
  async findActiveByHash(hash:string){const row=[...this.rows.values()].find(value=>value.magnetHash===hash&&!value.deletedAt);return row?structuredClone(row):null;}

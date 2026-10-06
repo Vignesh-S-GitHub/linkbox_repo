@@ -288,3 +288,31 @@ Tests include existing mock API/business coverage, private-token setup, and real
 - Fragmented storage: a file must fit one account even when aggregate free space looks sufficient.
 - Old file pending cleanup: Cron runs hourly; provider outages retry next cycle and stale claims recover after 5 minutes. Storage-only never deletes.
 - Build/migration `spawn EPERM`: run the normal commands in user PowerShell and report the output; do not bypass security.
+
+## Install LinkBox as an app
+
+After this update is deployed, open **Settings → LinkBox app**. On compatible browsers, **Install LinkBox** opens the browser's installation prompt. When the browser does not offer a prompt, **How to install** shows platform instructions:
+
+- Android: Chrome menu → Install app / Add to Home screen.
+- iPhone / iPad: Safari → Share → Add to Home Screen → Add.
+- Windows: Edge or Chrome → address-bar install icon or browser's Install app menu.
+
+This is a progressive web app (PWA), not a Play Store, App Store or Microsoft Store package. HTTPS is required, except for localhost testing. Install prompts and standalone behaviour depend on the browser/device; the in-app testing browser may show only manual instructions. See [MDN installability guidance](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Making_PWAs_installable).
+
+The approved LinkBox icons and theme are reused. No additional paid service or PWA library is required. `npm run build` generates a versioned service worker from the public template and the hashed Vite assets. Registration is disabled on the Vite development server; use a production build/preview or Pages to test installation.
+
+### Offline, updates and privacy
+
+Only the public HTML/JS/CSS shell, manifest and brand images are cached. **API responses, file lists, account information, signed delivery URLs and downloaded/streamed media are never cached by the service worker.** API requests remain `no-store`. File operations, fresh storage counts and playback require internet. Last-known information is retained in memory on outages and labelled as potentially out of date; it is not an offline file backup. An offline cold launch has no saved file list.
+
+New app versions wait until old windows close, or until you choose **Settings → Update app & reload**. Finish submissions/playback before requesting an update. No update automatically reloads an active video. If you intentionally activate an update, other open app windows may need a reload, especially offline. Static cache size is bounded; browser storage eviction can remove it at any time.
+
+Use the same browser/profile to retain permission to delete your own downloads. Installed apps—particularly Safari home-screen apps—may use a separate storage context. Clearing/denying storage, switching profiles/devices, or reinstalling can lose owner permission. There is no login-based recovery in V1; the 24-hour automatic cleanup still applies. Do not share the browser identifier or private admin key. Admin authentication remains in memory and locks when the page is hidden.
+
+### Production review and maintenance
+
+See [PRODUCTION_REVIEW.md](PRODUCTION_REVIEW.md) for the review scope, verified checks and remaining operational limits. Progress polling now selects the least recently polled pending records instead of repeatedly favouring newest files. Browser refreshes are deduplicated, cancellable and cannot overwrite a newer local add/delete. Quota failures do not erase successful file-list responses. Reads time out after 60 seconds, writes after 120 seconds; uncertain writes are never automatically retried. Check Files before retrying an unconfirmed submission/deletion. Repeated full-storage submissions also consume the existing cooldown.
+
+Cloudflare Pages uses `apps/web/public/_headers` for CSP, clickjacking protection, MIME protection and referrer policy. If you change the Worker hostname, update its `connect-src` allowlist together with `VITE_API_URL` and Worker `ALLOWED_ORIGIN`. No media is proxied through Pages or Workers. CSP allows the documented Seedr delivery hosts and HTTPS native media; do not loosen it to accept arbitrary scripts.
+
+Three build-tool patches are temporarily enforced using npm overrides: `source-map-js@1.2.2`, and Miniflare's `sharp@0.35.5` / `undici@7.29.1`. This fixes the reviewed [source-map advisory](https://github.com/advisories/GHSA-68fv-2mgg-jv7q), [sharp advisory](https://github.com/advisories/GHSA-wq5f-xc86-pv6w) and [Undici security fixes](https://github.com/nodejs/undici/releases/tag/v7.29.1), without migrating Vite, React or Wrangler. Remove these temporary pins when upstream dependencies include equivalent fixes, then rerun all checks. CI now runs `npm audit --audit-level=high`; this is a point-in-time vulnerability check, not a guarantee against future advisories.

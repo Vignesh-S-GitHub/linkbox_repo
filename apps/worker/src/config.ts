@@ -14,7 +14,7 @@ export function accountsFromEnv(env: Env): AccountConfig[] {
       if (typeof value !== "object" || value === null) throw new Error("invalid");
       const record = value as Record<string, unknown>;
       if (typeof record.id !== "string" || !/^[a-z0-9-]{1,64}$/.test(record.id) || ids.has(record.id) ||
-          typeof record.label !== "string" || !record.label.trim() || record.label.length > 128 ||
+          typeof record.label !== "string" || !record.label.trim() || record.label.length > 100 ||
           typeof record.capacityBytes !== "number" || !Number.isSafeInteger(record.capacityBytes) || record.capacityBytes <= 0 ||
           typeof record.secretKeyReference !== "string" || !/^SEEDR_[A-Z0-9_]+_TOKEN$/.test(record.secretKeyReference) || secrets.has(record.secretKeyReference) ||
           (record.enabled !== undefined && typeof record.enabled !== "boolean")) throw new Error("invalid account");

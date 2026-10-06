@@ -447,6 +447,71 @@ test("Cron still expires app-owned downloads on a disabled account using its ret
  assert.deepEqual(deleted,["/tasks/20","/fs/folder/10"]);assert.equal((await db.findByPublicId(row.publicId)).status,"expired");
  }finally{globalThis.fetch=original;sqlite.close();}
 });
+test("progress candidates rotate fairly instead of starving the oldest transfers",async()=>{
+ const {sqlite,db}=setup();try{
+ await db.syncAccounts([account]);const clock=Date.now(), rows=[];
+ for(let i=0;i<4;i++)rows.push(await db.create(fixture(0,{status:"downloading",kind:"folder",createdAt:new Date(clock+i).toISOString(),cleanupAllowedAt:new Date(clock+i+10800000).toISOString(),expiresAt:new Date(clock+i+86400000).toISOString()})));
+ assert.deepEqual(await db.progressCandidates(clock+10),[rows[0].publicId,rows[1].publicId]);
+ for(const row of rows.slice(0,2))assert.ok(await db.acquireLease(`poll:${row.publicId}`,clock+10,15000));
+ // Newest-first list ordering cannot influence fair provider work selection.
+ assert.equal((await db.listActive())[0].publicId,rows[3].publicId);
+ assert.deepEqual(await db.progressCandidates(clock+16000),[rows[2].publicId,rows[3].publicId]);
+ for(const row of rows.slice(2))await db.acquireLease(`poll:${row.publicId}`,clock+16000,15000);
+ assert.deepEqual(await db.progressCandidates(clock+16001),[rows[0].publicId,rows[1].publicId]);
+ await db.update({...rows[0],status:"failed"});assert.deepEqual(await db.progressCandidates(clock+16001),[rows[1].publicId]);
+ }finally{sqlite.close();}
+});
+test("full-storage attempts are rate limited before repeating Seedr quota calls",async()=>{
+ const {sqlite,binding}=setup(),original=globalThis.fetch;let calls=0;
+ try{globalThis.fetch=async(url,options)=>{calls++;assert.ok(url.endsWith("/me/quota"));assert.equal(options.method,"GET");return Response.json({space_max:5000,space_used:5000});};
+ const request=hash=>new Request("https://worker.example/api/downloads",{method:"POST",headers:{origin:"https://app.example","x-session-id":crypto.randomUUID(),"cf-connecting-ip":"192.0.2.20","content-type":"application/json"},body:JSON.stringify({magnet:"magnet:?xt=urn:btih:"+hash.repeat(40)})});
+ assert.equal((await worker.fetch(request("a"),adminEnv(binding))).status,409);assert.equal(calls,1);
+ assert.equal((await worker.fetch(request("b"),adminEnv(binding))).status,429);assert.equal(calls,1);
+ }finally{globalThis.fetch=original;sqlite.close();}
+});
+
+test("live submission uses the admin-added second account when the first has 4.8 of 5 GB occupied",async()=>{
+ const {sqlite,db,binding}=setup(),original=globalThis.fetch,gib=1024**3;
+ const first={...configA,capacityBytes:5*gib},second={...configA,id:"admin-added-b",label:"Second account",capacityBytes:4.5*gib,secretKeyReference:"SEEDR_ACCOUNT_B_TOKEN"};
+ const env=adminEnv(binding,{SEEDR_ACCOUNT_CONFIG:JSON.stringify([first])});let publicId;const writes=[];
+ try{
+ await db.saveAccountConfiguration(second);
+ globalThis.fetch=async(url,options)=>{
+  const path=new URL(url).pathname.replace("/api/v0.1/p","");
+  const isSecond=options.headers.Authorization==="Bearer fixture-B";
+  if(path==="/me/quota")return Response.json({space_max:isSecond?4.5*gib:5*gib,space_used:isSecond?0:Math.floor(4.8*gib)});
+  assert.ok(isSecond,"file operations must use only the second account token");
+  if(options.method==="POST")writes.push(path);
+  if(path==="/fs/folder"&&options.method==="POST"){
+   const body=JSON.parse(options.body);publicId=body.name.slice("LinkBox-".length);return Response.json({id:101});
+  }
+  if(path==="/tasks"&&options.method==="POST"){
+   assert.equal(JSON.parse(options.body).folder_id,101);return Response.json({user_torrent_id:201,title:"Authorized sample archive"});
+  }
+  if(path==="/tasks/201")return Response.json({task:{id:201,folder_id:101,name:"Authorized sample archive",size:2*gib,state:"downloading",progress:1.6,error:null}});
+  if(path==="/fs/folder/101/contents")return Response.json({id:101,path:`LinkBox-${publicId}`,size:0,files:[],folders:[]});
+  assert.fail("Unexpected fixture endpoint");
+ };
+ const response=await worker.fetch(new Request("https://worker.example/api/downloads",{method:"POST",headers:{origin:"https://app.example","x-session-id":crypto.randomUUID(),"content-type":"application/json"},body:JSON.stringify({magnet:"magnet:?xt=urn:btih:"+"e".repeat(40)+"&xl="+2*gib})}),env);
+ assert.equal(response.status,201);const created=await response.json();
+ assert.equal((await db.findByPublicId(created.id)).seedrAccountId,second.id);
+ assert.deepEqual(writes,["/fs/folder","/tasks"]);
+ const files=await(await worker.fetch(new Request("https://worker.example/api/downloads"),env)).json();
+ assert.equal(files[0].status,"downloading");assert.equal(files[0].sizeBytes,2*gib);assert.equal(files[0].progress,1.6);assert.equal(files[0].errorMessage,undefined);
+ assert.equal((await db.findByPublicId(created.id)).errorMessage,null);
+ for(const privateValue of [first.id,second.id,"fixture-A","fixture-B","seedrAccountId"])assert.ok(!JSON.stringify(files).includes(privateValue));
+ }finally{globalThis.fetch=original;sqlite.close();}
+});
+test("101-character account labels reject before contacting Seedr or writing D1",async()=>{
+ const {sqlite,db,binding}=setup(),original=globalThis.fetch;
+ try{globalThis.fetch=()=>assert.fail("invalid label must fail before quota");
+ assert.equal((await worker.fetch(adminRequest("",{...addB,label:"A".repeat(101)}),adminEnv(binding))).status,400);
+ assert.deepEqual(await db.accountConfigurations(),[]);
+ const {accountsFromEnv}=require("./logic-test-build/apps/worker/src/config.js");
+ assert.throws(()=>accountsFromEnv({SEEDR_ACCOUNT_CONFIG:JSON.stringify([{...configA,label:"A".repeat(101)}])}));
+ assert.equal(accountsFromEnv({SEEDR_ACCOUNT_CONFIG:JSON.stringify([{...configA,label:"A".repeat(100)}])})[0].label.length,100);
+ }finally{globalThis.fetch=original;sqlite.close();}
+});
 test("D1 raw provider errors never appear in public database errors", async () => {
   const db = new D1MetadataDatabase({ prepare() { throw new Error("private SQL and internal identifier"); } });
   await assert.rejects(db.listActive(), e => e.code === "database_unavailable" && !e.message.includes("private"));

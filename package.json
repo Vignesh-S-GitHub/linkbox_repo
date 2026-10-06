@@ -11,7 +11,8 @@
     "build": "npm run build --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspace=@temporary-share/worker && npm run test:seedr-connection && node scripts/admin-setup.test.mjs",
+    "test": "npm run test --workspace=@temporary-share/worker && npm run test:seedr-connection && node scripts/admin-setup.test.mjs && npm run test:web-safety",
+    "test:web-safety": "node scripts/web-safety.test.mjs",
     "test:seedr-connection": "node scripts/seedr-check.test.mjs",
     "seedr:check": "powershell -NoProfile -File scripts/seedr-connect.ps1",
     "seedr:configure": "powershell -NoProfile -File scripts/seedr-connect.ps1 -Configure",
@@ -20,5 +21,9 @@
     "db:migrate:local": "npm run db:migrate:local --workspace=@temporary-share/worker",
     "db:migrate:remote": "npm run db:migrate:remote --workspace=@temporary-share/worker"
   },
-  "devDependencies": {"typescript": "^5.9.3"}
+  "devDependencies": {"typescript": "^5.9.3"},
+  "overrides": {
+    "source-map-js": "1.2.2",
+    "miniflare": { "sharp": "0.35.5", "undici": "7.29.1" }
+  }
 }
