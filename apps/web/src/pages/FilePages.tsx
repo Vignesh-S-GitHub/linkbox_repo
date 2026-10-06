@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronLeft, ChevronRight, LoaderCircle, Search, Trash2, X } from "lucide-react";
+import { AlertCircle, ChevronLeft, ChevronRight, LoaderCircle, Search, Trash2, X } from "lucide-react";
 import type { FileContents, FileEntry, PublicDownload } from "@temporary-share/shared";
 import { Brand } from "../components/Brand";
 import { BrandIcon } from "../components/BrandIcon";
@@ -14,6 +14,11 @@ export function UnavailablePage({ onFiles, message }: { onFiles: () => void; mes
   return <section className="unavailable"><div className="missing-art"><FileTile kind="text"/><span><X size={20}/></span></div><h1>File unavailable</h1><p>{message ?? "This file is no longer available in LinkBox."}</p><button className="primary" onClick={onFiles}>Go to files</button></section>;
 }
 export function ProgressPage({ file, onClose, onDelete }: { file: PublicDownload; onClose: () => void; onDelete:()=>void }) {
+  if (file.status === "failed") return <div className="progress-page"><section className="card">
+    <div className="folder-heading"><FileTile kind={downloadKind(file)}/><div><strong>{file.displayName}</strong><small>{file.sizeBytes ? formatBytes(file.sizeBytes) : "Size could not be determined"}</small></div></div>
+    <h2 className="download-failed-heading"><AlertCircle size={23}/>Download failed</h2>
+    <p className="inline-error" role="alert">{file.errorMessage ?? "Seedr could not complete this download. Check file availability and available storage."}</p>
+  </section><button className="primary full-width" onClick={onClose}>Back to files</button>{file.canDelete && <button className="unavailable-action full-width" onClick={onDelete}><Trash2 size={19}/>Delete</button>}</div>;
   const steps = ["Added", "Fetching metadata", "Downloading", "Processing", "Ready"];
   const step = file.status === "ready" ? 4 : file.status === "processing" ? 3 : file.status === "downloading" ? 2 : 1;
   return <div className="progress-page"><section className="card"><div className="folder-heading"><FileTile kind={downloadKind(file)}/><div><strong>{file.displayName}</strong><small>{file.sizeBytes ? formatBytes(file.sizeBytes) : "Size pending metadata"}</small></div></div>

@@ -21,6 +21,7 @@
     "src/types.ts",
     "src/index.ts",
     "../web/src/lib/routes.ts",
-    "../web/src/lib/download-link.ts"
+    "../web/src/lib/download-link.ts",
+    "../web/src/lib/download-status.ts"
   ]
 }

@@ -10,6 +10,8 @@ const { parseRoute, routeUrl, screenNames, isFolderView } = require("./logic-tes
 const worker = require("./logic-test-build/apps/worker/src/index.js").default;
 const {downloadKind,formatProgress}=require("./logic-test-build/packages/shared/src/file-kind.js");
 const {canCopyDownloadLink,copyDownloadLink}=require("./logic-test-build/apps/web/src/lib/download-link.js");
+const {isTransferring,isSizePending}=require("./logic-test-build/apps/web/src/lib/download-status.js");
+const {itemFailure,metadataTimedOut,MISSING_TASK_GRACE_MS,METADATA_TIMEOUT_MS}=require("./logic-test-build/apps/worker/src/seedr/download-policy.js");
 
 const gib = 1024 ** 3;
 const accounts = () => [
@@ -26,6 +28,40 @@ const makeRow = (createdAt, publicId = "public") => ({
 const adapter = { deleteItem: async () => undefined };
 const tests = [];
 const test = (name, fn) => tests.push([name, fn]);
+
+test("8 GB is rejected against a 5 GB account, never against combined 9.5 GB",()=>{
+ const now=Date.now(),row=makeRow(new Date(now).toISOString());
+ const item={sizeBytes:8*gib,status:"downloading",progress:1};
+ assert.equal(itemFailure(row,item,10*gib,5*gib,now).remove,true);
+ assert.equal(itemFailure(row,item,10*gib,4.5*gib,now).remove,true);
+ assert.equal(itemFailure(row,{...item,sizeBytes:4*gib},10*gib,4.5*gib,now),null);
+ assert.equal(itemFailure(row,{...item,sizeBytes:4*gib},3*gib,5*gib,now).remove,true);
+});
+
+test("missing task has an exact five-minute grace; unknown metadata expires at fifteen minutes",()=>{
+ const now=Date.now(),row={...makeRow(new Date(now).toISOString()),status:"fetching_metadata",sizeBytes:0,progress:0};
+ const item={sizeBytes:0,status:"fetching_metadata",progress:0,taskMissing:true};
+ assert.equal(itemFailure(row,item,5*gib,5*gib,now+MISSING_TASK_GRACE_MS-1),null);
+ const missing=itemFailure(row,item,5*gib,5*gib,now+MISSING_TASK_GRACE_MS);assert.equal(missing.remove,false);assert.match(missing.message,/did not confirm/);
+ assert.equal(metadataTimedOut(row,now+METADATA_TIMEOUT_MS-1),false);
+ const timeout=itemFailure(row,{...item,taskMissing:false},5*gib,5*gib,now+METADATA_TIMEOUT_MS);assert.equal(timeout.remove,false);assert.match(timeout.message,/15 minutes/);
+});
+
+test("resolved or progressing slow-peer transfers are not mistaken for unknown metadata",()=>{
+ const now=Date.now(),row={...makeRow(new Date(now-3600000).toISOString()),status:"fetching_metadata",sizeBytes:0,progress:0};
+ for(const item of [{sizeBytes:gib,status:"fetching_metadata",progress:0},{sizeBytes:0,status:"downloading",progress:1.6},{sizeBytes:gib,status:"downloading",progress:0}])assert.equal(itemFailure(row,item,5*gib,5*gib,now),null);
+ for(const changes of [{sizeBytes:gib},{progress:1.6},{status:"downloading"}])assert.equal(metadataTimedOut({...row,...changes},now),false);
+ assert.equal(itemFailure(row,{sizeBytes:100,status:"failed",progress:0},5*gib,5*gib,now).remove,false);
+});
+
+test("failed rows have no transfer spinner and unknown sizes are not measured zero-byte files",()=>{
+ for(const status of ["failed","ready","deleted","expired","deleting"])assert.equal(isTransferring(status),false);
+ for(const status of ["queued","fetching_metadata","downloading","processing"])assert.equal(isTransferring(status),true);
+ assert.equal(isSizePending({sizeBytes:0,status:"fetching_metadata"}),true);
+ assert.equal(isSizePending({sizeBytes:0,status:"failed"}),true);
+ assert.equal(isSizePending({sizeBytes:0,status:"ready"}),false);
+ assert.equal(isSizePending({sizeBytes:100,status:"failed"}),false);
+});
 
 test("direct link copying requires a ready unexpired individual file",()=>{
  const now=Date.now(),file={status:"ready",deletedAt:null,expiresAt:new Date(now+60000).toISOString(),kind:"video",displayName:"Demo.mp4"};

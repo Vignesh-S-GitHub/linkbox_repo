@@ -5,6 +5,7 @@ import { formatBytes } from "../lib/format";
 import { BrandIcon } from "./BrandIcon";
 
 import { kindLabels, statusLabels } from "../lib/file-labels";
+import { isSizePending, isTransferring } from "../lib/download-status";
 export function FileTile({ kind }: { kind: FileKind }) {
   const icons = { video: Film, audio: Music, image: Image, archive: FileArchive, sheet: FileSpreadsheet, presentation: Presentation, pdf: FileText, text: FileText, subtitle: FileText, other: FileText };
   if (kind === "folder") return <span className="file-tile folder"><BrandIcon name="folder" variant="file" size={35}/></span>;
@@ -21,10 +22,10 @@ export function FileRow({ file, entry, compact = false, onOpen, onMore, onDownlo
   return <article className="file-row">
     <button className="file-open" onClick={onOpen} aria-label={`Open ${name}`}><FileTile kind={kind}/>
       <span className="file-meta"><strong title={name}>{name}</strong>
-        {!ready && !entry ? <><span className="meter mini" role="progressbar" aria-label="Download progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={file.progress}><span style={{ width: `${file.progress}%` }}/></span><small>{statusLabels[file.status]}{["downloading", "fetching_metadata"].includes(file.status) ? ` · ${formatProgress(file.progress)}` : ""}</small></> : <small>{formatBytes(size)} · {compact ? <em>Ready</em> : kindLabels[kind]}{!compact && kind === "folder" && file.fileCount ? ` · ${file.fileCount} files` : ""}</small>}
+        {!ready && !entry ? <>{isTransferring(file.status) && <span className="meter mini" role="progressbar" aria-label="Download progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={file.progress}><span style={{ width: `${file.progress}%` }}/></span>}<small>{statusLabels[file.status]}{["downloading", "fetching_metadata"].includes(file.status) ? ` · ${formatProgress(file.progress)}` : ""}</small>{file.errorMessage && <small className="file-error">{file.errorMessage}</small>}</> : <small>{formatBytes(size)} · {compact ? <em>Ready</em> : kindLabels[kind]}{!compact && kind === "folder" && file.fileCount ? ` · ${file.fileCount} files` : ""}</small>}
       </span>
     </button>
-    {!ready && !compact && <span className="row-size">{formatBytes(size)}</span>}
+    {!ready && !compact && <span className="row-size">{isSizePending(file) ? "Size unknown" : formatBytes(size)}</span>}
     {ready && !compact && <div className="row-tools">
       {(entry?.playable ?? file.playable) && <button className="file-action" onClick={onOpen} aria-label={`Play ${name}`}><BrandIcon name="play" size={18}/></button>}
       {kind === "pdf" && <button className="file-action" onClick={onOpen} aria-label={`Preview ${name}`}><BrandIcon name="preview" size={18}/></button>}

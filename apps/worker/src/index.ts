@@ -14,6 +14,7 @@ import { readJsonBody } from "./utils/request-body";
 import { ownsDownload, requestOwnerHash } from "./utils/owner";
 import { configuredEnvironment } from "./accounts/configuration";
 import { adminAccounts, changeAccount, requireAdmin } from "./accounts/admin";
+import { itemFailure, metadataTimedOut, metadataTimeoutMessage, rejectionMessage } from "./seedr/download-policy";
 
 // Only synthetic local demo state lives in memory. Live coordination lives in D1.
 let mockAdapter: MockSeedrAdapter | undefined;
@@ -44,7 +45,7 @@ async function storageSnapshot(database: Database, adapter: SeedrAdapter, env: E
   const accounts = await adapter.syncAccounts(); await database.syncAccounts(accounts); return toStorage(accounts);
 }
 async function refreshRows(database: Database, adapter: SeedrAdapter, env: Env) {
-  const rows = await database.listActive();
+  const rows = await database.listActive(), cachedAccounts = await database.cachedAccounts(true);
   const result: DownloadRow[] = []; let refreshed = 0;
   // Sequential bounded work avoids exhausting the free Worker's subrequest limit.
   for (const row of rows) {
@@ -61,18 +62,34 @@ async function refreshRows(database: Database, adapter: SeedrAdapter, env: Env) 
         continue;
       }
       const item = await adapter.getItem(row.seedrAccountId, row.seedrItemId);
-      if (item.sizeBytes > maxFileBytes(env)) {
-        // Provider resolves size after acceptance. Policy rejects oversized owned
-        // content without retaining an unsafe task.
-        await adapter.deleteItem(row.seedrAccountId, item.itemId);
-        result.push(await database.update({ ...row, seedrItemId: item.itemId, sizeBytes: item.sizeBytes, status: "failed", playable: false,
-          errorMessage: "This file exceeds the supported size limit and was removed." }));
-      } else result.push(await database.update({ ...row, seedrItemId: item.itemId, displayName: item.displayName, sizeBytes: item.sizeBytes,
-        status: item.status, progress: item.progress, playable: item.playable, kind: item.kind ?? null, fileCount: item.fileCount ?? null,
-        errorMessage: item.status === "failed" ? "Download failed or was removed from Seedr." : null }));
-    } catch {
-      // A transient outage must not permanently fail the task or lose ownership.
-      result.push(reconcile ? row : await database.update({ ...row, errorMessage: "Seedr is temporarily unavailable. Progress will retry automatically." }));
+      const capacity = cachedAccounts.find(account => account.id === row.seedrAccountId)?.capacityBytes ??
+        accountsFromEnv(env).find(account => account.id === row.seedrAccountId)?.capacityBytes ?? 0;
+      const failure = itemFailure(row,item,maxFileBytes(env),capacity);
+      const updated = { ...row, seedrItemId:item.itemId, displayName:item.taskMissing ? row.displayName : item.displayName,
+        sizeBytes:item.sizeBytes, progress:item.progress, kind:item.kind ?? null, fileCount:item.fileCount ?? null };
+      if (failure?.remove) {
+        // Shares the cleanup claim with owner deletion/Cron. A stale poll cannot
+        // delete a changed task or double-process a file already being removed.
+        const claimed = await database.claimForFailure(row.publicId,new Date().toISOString(),row.seedrItemId);
+        if (!claimed) { result.push(await database.findByPublicId(row.publicId) ?? row); continue; }
+        let removed = false;
+        try { await adapter.deleteItem(row.seedrAccountId,item.itemId); removed = true; }
+        catch { /* Preserve ownership for explicit Delete or the 24-hour Cron retry. */ }
+        result.push(await database.update({ ...updated, status:"failed", playable:false, cleanupClaimedAt:null,
+          errorMessage:failure.message + (removed ? " The temporary task was removed." : " Removal could not finish. Use Delete to retry; automatic expiry remains enabled.") },claimed.cleanupClaimedAt));
+      } else if (failure) {
+        // Unknown/missing metadata is not evidence that personal or slow files
+        // should be deleted. Only the app record becomes terminal here.
+        result.push(await database.update({ ...updated, status:"failed", playable:false, errorMessage:failure.message }));
+      } else result.push(await database.update({ ...updated, status:item.status, playable:item.playable,
+        errorMessage: item.taskMissing ? "Seedr has not confirmed this download yet. Waiting briefly for file information." : null }));
+    } catch (error) {
+      const rejected = error instanceof ApiProblem && error.code === "seedr_rejected";
+      const timedOut = metadataTimedOut(row);
+      // Real transfers survive transient outages. Unconfirmed zero-size admission
+      // gets a bounded failure, retaining ownership and the original 24h expiry.
+      result.push(reconcile ? row : await database.update({ ...row, status:rejected || timedOut ? "failed" : row.status,
+        errorMessage:rejected ? rejectionMessage : timedOut ? metadataTimeoutMessage : "Seedr is temporarily unavailable. Progress will retry automatically." }));
     }
   }
   return result;
@@ -142,7 +159,7 @@ async function createDownload(request: Request, env: Env) {
       // Persist uncertain acceptance instead of blindly replaying POST. Polling
       // recovers by the exact app folder; Cron can clean abandoned reservations.
       const rejected = error instanceof ApiProblem && error.status === 409;
-      row = await database.update({ ...row, status: rejected ? "failed" : "fetching_metadata", errorMessage: rejected ? "Seedr could not accept this download. Check available storage and account restrictions." : "Submission confirmation is delayed. Progress will retry automatically." });
+      row = await database.update({ ...row, status: rejected ? "failed" : "fetching_metadata", errorMessage: rejected ? rejectionMessage : "Submission confirmation is delayed. Progress will retry automatically." });
     }
     return publicDownload(row,true);
   } finally { await database.releaseLease("submission", lock); }
