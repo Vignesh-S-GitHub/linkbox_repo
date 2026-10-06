@@ -366,3 +366,14 @@ input[type="radio"],input[type="checkbox"] { accent-color:var(--lb-primary); wid
   .filter-tabs { gap:5px; }.filter-tabs button { padding:0 9px; }
 }
 @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; scroll-behavior:auto!important; } }
+.install-card { margin-top:20px; }
+.install-heading { display:flex; align-items:flex-start; gap:12px; margin-bottom:16px; }
+.install-heading>svg { flex-shrink:0; color:var(--lb-primary); margin-top:2px; }
+.install-heading h2 { font-size:16px; margin:0 0 6px; }
+.install-heading p,.install-note,.install-help p { font-size:12px; line-height:1.6; color:var(--lb-muted); margin:0; }
+.install-card .primary,.install-update { min-height:48px; display:flex; align-items:center; justify-content:center; gap:8px; width:100%; }
+.install-note { margin-top:14px; }
+.install-help { padding:4px 0; }
+.install-help p { margin-top:12px; }
+.install-help strong { color:var(--lb-text); }
+.install-update { margin-top:12px; }

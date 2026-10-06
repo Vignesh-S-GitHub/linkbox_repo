@@ -99,6 +99,17 @@ export class D1MetadataDatabase implements Database {
     return result.results.map(mapRow);
   }
 
+  async progressCandidates(now: number): Promise<string[]> {
+    const result = await this.query(() => this.db.prepare(`SELECT d.public_id FROM downloads d
+      LEFT JOIN request_guards g ON g.name='poll:' || d.public_id
+      WHERE d.deleted_at IS NULL AND d.expires_at>?1 AND d.cleanup_claimed_at IS NULL
+        AND (d.status IN ('queued','fetching_metadata','downloading','processing') OR (d.status='ready' AND d.kind IS NULL))
+        AND (g.expires_ms IS NULL OR g.expires_ms<=?2)
+      ORDER BY COALESCE(g.expires_ms,0),d.created_at,d.public_id LIMIT 2`)
+      .bind(new Date(now).toISOString(),now).all<{public_id:string}>());
+    return result.results.map(row => row.public_id);
+  }
+
   async findByPublicId(publicId: string): Promise<DownloadRow | null> {
     const row = await this.query(() => this.db.prepare(`SELECT ${columns} FROM downloads
       WHERE public_id=?1 LIMIT 1`).bind(publicId).first<StoredRow>());

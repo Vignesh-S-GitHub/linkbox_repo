@@ -56,7 +56,7 @@ export async function changeAccount(request: Request, env: Env, database: Databa
     if (accounts.length >= 8) throw new ApiProblem(409,"account_limit","Up to eight accounts can be configured, including disabled accounts.");
     const label = typeof body.label === "string" ? body.label.trim() : "";
     const reference = body.secretKeyReference;
-    if (!label || label.length > 128 || [...label].some(character=>character.charCodeAt(0)<32||character.charCodeAt(0)===127) || typeof reference !== "string" || !/^SEEDR_[A-Z0-9_]+_TOKEN$/.test(reference) || reference.length > 128 || body.distinctAccount !== true || Object.keys(body).some(key => !["label","secretKeyReference","distinctAccount"].includes(key))) {
+    if (!label || label.length > 100 || [...label].some(character=>character.charCodeAt(0)<32||character.charCodeAt(0)===127) || typeof reference !== "string" || !/^SEEDR_[A-Z0-9_]+_TOKEN$/.test(reference) || reference.length > 128 || body.distinctAccount !== true || Object.keys(body).some(key => !["label","secretKeyReference","distinctAccount"].includes(key))) {
       throw new ApiProblem(400,"invalid_account","Enter a label and Worker secret name, and confirm this is a different Seedr account. Never enter a token here.");
     }
     if (accounts.some(value => value.secretKeyReference === reference)) throw new ApiProblem(409,"duplicate_account","This Worker secret is already connected.");

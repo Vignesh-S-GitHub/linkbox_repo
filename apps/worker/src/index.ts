@@ -46,12 +46,13 @@ async function storageSnapshot(database: Database, adapter: SeedrAdapter, env: E
 }
 async function refreshRows(database: Database, adapter: SeedrAdapter, env: Env) {
   const rows = await database.listActive(), cachedAccounts = await database.cachedAccounts(true);
+  const candidates = new Set(await database.progressCandidates(Date.now()));
   const result: DownloadRow[] = []; let refreshed = 0;
   // Sequential bounded work avoids exhausting the free Worker's subrequest limit.
   for (const row of rows) {
     const reconcile = row.status === "ready" && !row.kind;
     if ((!reconcile && ["ready", "failed", "deleted", "expired", "deleting"].includes(row.status)) || row.expiresAt <= new Date().toISOString() ||
-        refreshed >= 2 || !await database.acquireLease(`poll:${row.publicId}`, Date.now(), reconcile ? 300000 : 15000)) { result.push(row); continue; }
+        refreshed >= 2 || !candidates.has(row.publicId) || !await database.acquireLease(`poll:${row.publicId}`, Date.now(), reconcile ? 300000 : 15000)) { result.push(row); continue; }
     refreshed++;
     try {
       if (reconcile) {
@@ -127,6 +128,8 @@ async function createDownload(request: Request, env: Env) {
     env = await configuredEnvironment(env,database);
     const adapter = adapterFor(env);
     if (await database.findActiveByHash(hash)) throw new ApiProblem(409, "duplicate_magnet", "That download is already active.");
+    // Reject repeated attempts before expensive quota/metadata calls, even when full.
+    await rateLimit(database, request, env, "submit");
     const [inspection, accounts, active] = await Promise.all([adapter.inspectMagnet(magnet), adapter.syncAccounts(), database.listActive()]);
     await database.syncAccounts(accounts);
     if (active.length >= maxActiveDownloads(env)) throw new ApiProblem(429, "active_limit", "Shared storage has reached its active download limit.");
@@ -141,7 +144,6 @@ async function createDownload(request: Request, env: Env) {
         requestedBytes: requested ?? undefined, availableBytes: Math.max(0, ...candidates.map(value => value.availableBytes)),
       });
     }
-    await rateLimit(database, request, env, "submit");
     const created = new Date(), publicId = crypto.randomUUID();
     // Retained solely for the existing D1 schema constraint; no 3-hour policy uses this value.
     let row: DownloadRow = { id: crypto.randomUUID(), publicId, seedrAccountId: account.id, seedrItemId: `linkbox:${publicId}:0:0`, magnetHash: hash,
@@ -159,7 +161,10 @@ async function createDownload(request: Request, env: Env) {
       // Persist uncertain acceptance instead of blindly replaying POST. Polling
       // recovers by the exact app folder; Cron can clean abandoned reservations.
       const rejected = error instanceof ApiProblem && error.status === 409;
-      row = await database.update({ ...row, status: rejected ? "failed" : "fetching_metadata", errorMessage: rejected ? rejectionMessage : "Submission confirmation is delayed. Progress will retry automatically." });
+      const permissionRejected = error instanceof ApiProblem && error.code === "seedr_token_rejected";
+      row = await database.update({ ...row, status: rejected || permissionRejected ? "failed" : "fetching_metadata", errorMessage: permissionRejected
+        ? "Seedr rejected the account token permissions for this action. Ask the administrator to check the token's file and download permissions, then delete this item before retrying."
+        : rejected ? rejectionMessage : "Submission confirmation is delayed. Progress will retry automatically." });
     }
     return publicDownload(row,true);
   } finally { await database.releaseLease("submission", lock); }

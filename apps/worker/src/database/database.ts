@@ -8,6 +8,8 @@ export interface Database {
  releaseLease(name:string,holder:string):Promise<void>;
  pruneGuards(now:number):Promise<void>;
  listActive():Promise<DownloadRow[]>; findByPublicId(publicId:string):Promise<DownloadRow|null>;
+ /** Least recently polled eligible rows, bounded to the per-request provider budget. */
+ progressCandidates(now:number):Promise<string[]>;
  findActiveByHash(hash:string):Promise<DownloadRow|null>; create(row:DownloadRow):Promise<DownloadRow>;
  update(row:DownloadRow,expectedCleanupClaim?:string|null):Promise<DownloadRow>;
  /** Internal policy removal only: CAS against the item observed by the progress poll. */
