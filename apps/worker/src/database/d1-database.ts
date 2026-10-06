@@ -135,13 +135,15 @@ export class D1MetadataDatabase implements Database {
 
   async update(row: DownloadRow, expectedCleanupClaim: string | null = row.cleanupClaimedAt): Promise<DownloadRow> {
     // Lifecycle identity/dates are immutable. A progress poll must never overwrite a
-    // cleanup claim or resurrect a deleted row. Only the holder of the claim updates it.
+    // cleanup claim, revive a terminal failure or resurrect a deleted row.
+    // Only the holder of the claim updates it.
     const result = await this.query(() => this.db.prepare(`UPDATE downloads
       SET display_name=?1, size_bytes=?2, status=?3, progress=?4, deleted_at=?5,
           error_message=?6, cleanup_claimed_at=?7, playable=?8, updated_at=?9, seedr_item_id=?12,
           kind=?13, file_count=?14
       WHERE id=?10 AND deleted_at IS NULL
         AND cleanup_claimed_at IS ?11
+        AND (status != 'failed' OR ?3 IN ('failed','deleting','deleted','expired'))
       RETURNING ${columns}`).bind(row.displayName, row.sizeBytes, row.status, row.progress,
       row.deletedAt, row.errorMessage, row.cleanupClaimedAt, Number(row.playable), new Date().toISOString(),
       row.id, expectedCleanupClaim, row.seedrItemId, row.kind ?? null, row.fileCount ?? null).first<StoredRow>());
@@ -149,6 +151,15 @@ export class D1MetadataDatabase implements Database {
     const current = await this.findByPublicId(row.publicId);
     if (current) return current;
     throw new ApiProblem(404, "not_found", "This download does not exist.");
+  }
+
+  async claimForFailure(publicId: string, now: string, expectedItemId: string): Promise<DownloadRow | null> {
+    const row = await this.query(() => this.db.prepare(`UPDATE downloads
+      SET status='deleting', cleanup_claimed_at=?1, updated_at=?1
+      WHERE public_id=?2 AND seedr_item_id=?3 AND deleted_at IS NULL AND cleanup_claimed_at IS NULL
+        AND status IN ('queued','fetching_metadata','downloading','processing')
+      RETURNING ${columns}`).bind(now,publicId,expectedItemId).first<StoredRow>());
+    return row ? mapRow(row) : null;
   }
 
   async claimForCleanup(publicId: string, now: string, ownerSessionHash?: string): Promise<DownloadRow | null> {

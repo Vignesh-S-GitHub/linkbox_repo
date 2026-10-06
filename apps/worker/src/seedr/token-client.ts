@@ -66,9 +66,13 @@ export class SeedrTokenClient {
       const bytes = new Uint8Array(length); let offset = 0;
       for (const part of parts) { bytes.set(part, offset); offset += part.byteLength; }
       const data: unknown = JSON.parse(new TextDecoder().decode(bytes));
-      if (data && typeof data === "object" && ("error" in data || ("success" in data && data.success === false))) throw invalidResponse();
+      if (data && typeof data === "object" && (("error" in data && data.error) || ("success" in data && data.success === false))) {
+        // A confirmed JSON rejection is terminal, not a lost/uncertain POST.
+        // Never expose the provider's raw error text or credential-bearing payload.
+        throw new ApiProblem(409, "seedr_rejected", "Seedr could not accept this request. Check the file, available storage and account limits.");
+      }
       return data;
-    } catch { throw invalidResponse(); } finally { reader.releaseLock(); }
+    } catch (error) { if (error instanceof ApiProblem) throw error; throw invalidResponse(); } finally { reader.releaseLock(); }
   }
 
   async quota(): Promise<SeedrQuota> {

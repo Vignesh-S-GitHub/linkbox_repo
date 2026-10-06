@@ -116,7 +116,8 @@ export class LiveSeedrAdapter implements SeedrAdapter {
     const folder = await this.ownedFolder(client, id);
     if (!folder) return { itemId, displayName: "File unavailable", sizeBytes: 0, status: "failed", progress: 0, playable: false };
     const task = await this.task(client, id);
-    const size = task ? numeric(task.size) : numeric(folder.size);
+    // Metadata fields can be pending. Unknown size is not proof that an item fits.
+    const size = task ? task.size == null ? 0 : numeric(task.size) : numeric(folder.size);
     if (task && (typeof task.progress !== "number" || !Number.isFinite(task.progress))) throw invalid();
     const progress = task ? Math.min(100, Math.max(0, Number(task.progress))) : 0;
     const finished = task ? task.state === "finished" : numeric(folder.size) > 0;
@@ -127,7 +128,7 @@ export class LiveSeedrAdapter implements SeedrAdapter {
       status: failed ? "failed" : finished && files.length ? "ready" : progress >= 100 ? "processing" : progress > 0 ? "downloading" : "fetching_metadata",
       progress: finished ? 100 : progress, playable: files.length === 1 && files[0].entry.playable,
       kind: finished && files.length ? files.length === 1 ? files[0].entry.kind : "folder" : null,
-      fileCount: finished ? files.length : null };
+      fileCount: finished ? files.length : null, taskMissing: !task && !finished };
   }
   private async files(client: SeedrTokenClient, id: Identity, root: ObjectValue): Promise<RemoteFile[]> {
     const result: RemoteFile[] = [], pending = [root]; let visited = 0;

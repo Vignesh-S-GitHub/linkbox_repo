@@ -220,6 +220,14 @@ Task/folder mapping, temporary delivery and ownership-scoped deletion were verif
 
 ### Verified API and limitations
 
+#### Unknown size, rejected tasks and metadata timeouts
+
+Live magnets have no documented authoritative size-only preflight. A valid magnet can therefore be submitted with size still unknown; `0 B` is not an actual measured file size. Magnet `xl` hints are untrusted and are never used as proof that a file fits. Once Seedr supplies size, LinkBox checks both the configured maximum and the selected account's actual cached quota capacity, never the sum of accounts. An 8 GB item cannot fit a 5 GB or 4.5 GB account even when combined storage is 9.5 GB.
+
+Confirmed HTTP/JSON rejections become **Failed** immediately. An empty owned folder with no matching task gets a five-minute admission grace period, then becomes **Failed** rather than looping forever. Unknown zero-size/zero-progress metadata admission times out after fifteen minutes, including repeated provider errors. These deadlines are checked during normal progress polling; they are not precise background timers. Real downloads with resolved size/progress are not cancelled merely for having few peers. Missing tasks and metadata timeouts do not delete provider content automatically: the owner can use **Delete**, and the existing 24-hour Cron expiry remains in effect. Delete a failed record before resubmitting the same magnet.
+
+Known oversized tasks are stopped only beneath their verified LinkBox-owned folder, under the same atomic D1 cleanup claim used by owner deletion and Cron. A failure to remove provider content is clearly reported and retains the record for owner/Cron retry. Failed rows have no animated progress timeline, show a safe reason directly in the list and details, and unknown size is labelled **Size unknown**. No new Seedr endpoint, credential access, media proxy or paid service is added.
+
 #### Delete a mistakenly added magnet
 
 For newly submitted downloads, open the file's menu (⋮) and choose the single red **Delete** action, or use that option on its progress page. Confirming stops the task and deletes the entire LinkBox-managed download, including its folder contents and shared access. This is permanent, not an undo/trash feature. There is no “Not available” menu action; unavailable files still have a real error page.

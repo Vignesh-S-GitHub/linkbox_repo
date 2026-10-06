@@ -6,6 +6,31 @@ const item = `linkbox:${id}:10:20`;
 const tests = [];
 const test = (name,fn)=>tests.push([name,fn]);
 
+test("empty owned folder with no task is distinguished from real metadata wait",async()=>{
+ const {adapter}=fixture(),original=globalThis.fetch;
+ try{globalThis.fetch=async(url,options)=>{
+ assert.equal(options.method,"GET");
+ if(url.endsWith("/fs/folder/10/contents"))return Response.json({id:10,path:`LinkBox-${id}`,size:0,files:[],folders:[]});
+ if(url.endsWith("/tasks"))return Response.json({tasks:[]});
+ if(url.endsWith("/tasks/20"))return new Response(null,{status:404});
+ assert.fail("Unexpected test endpoint");
+ };
+ for(const key of [`linkbox:${id}:10:0`,item]){
+ const value=await adapter.getItem("a",key);assert.equal(value.taskMissing,true);assert.equal(value.sizeBytes,0);
+ }
+ globalThis.fetch=async url=>url.endsWith("/tasks/20")?Response.json({task:{id:20,folder_id:10,name:"Metadata pending",size:null,state:"queued",progress:0,error:null}}):Response.json({id:10,path:`LinkBox-${id}`,size:0,files:[],folders:[]});
+ const pending=await adapter.getItem("a",item);assert.equal(pending.taskMissing,false);assert.equal(pending.sizeBytes,0);assert.equal(pending.status,"fetching_metadata");
+ }finally{globalThis.fetch=original;}
+});
+
+test("JSON-level rejection is terminal and redacted; null/false error flags do not reject",async()=>{
+ for(const payload of [{success:false,error:"private provider details"},{error:"private provider details"}]){
+ const client=new SeedrTokenClient("fixture-secret",async()=>Response.json(payload));
+ await assert.rejects(client.request("/tasks","POST",{}),error=>error.status===409&&error.code==="seedr_rejected"&&!error.message.includes("private provider details"));
+ }
+ for(const error of [null,false,""]){const client=new SeedrTokenClient("fixture-secret",async()=>Response.json({success:true,error,tasks:[]}));assert.deepEqual(await client.request("/tasks"),{success:true,error,tasks:[]});}
+});
+
 test("provider decimal progress is not rounded down and invalid progress fails safely", async()=>{
  const {adapter,fetcher}=fixture(),original=globalThis.fetch;
  try {for(const progress of [1.6,6.15,99.999]){

@@ -51,6 +51,105 @@ function setup() {
 const tests = [];
 const test = (name, run) => tests.push([name, run]);
 
+async function pendingFixture(minutes,changes={},envChanges={}) {
+ const state=setup(),created=Date.now()-minutes*60000,publicId=crypto.randomUUID();
+ const configured={...account,enabled:true,capacityBytes:5*1024**3,secretKeyReference:"SEEDR_ACCOUNT_A_TOKEN"};
+ await state.db.syncAccounts([{...configured,usedBytes:0,availableBytes:configured.capacityBytes,lastSyncedAt:new Date().toISOString()}]);
+ const row=await state.db.create(fixture(1,{publicId,seedrItemId:`linkbox:${publicId}:10:0`,status:"fetching_metadata",sizeBytes:0,progress:0,
+ createdAt:new Date(created).toISOString(),cleanupAllowedAt:new Date(created+3*3600000).toISOString(),expiresAt:new Date(created+24*3600000).toISOString(),...changes}));
+ const env={DB:state.binding,SEEDR_MODE:"live",SEEDR_ACCESS:"full",SEEDR_ACCOUNT_CONFIG:JSON.stringify([configured]),SEEDR_ACCOUNT_A_TOKEN:"fixture-secret",...envChanges};
+ return {...state,row,env,publicId};
+}
+
+test("missing task becomes a durable failed record after grace, without provider deletion or repeated polls",async()=>{
+ const state=await pendingFixture(6),original=globalThis.fetch;let calls=0;
+ try{globalThis.fetch=async(url,options)=>{calls++;assert.equal(options.method,"GET");
+ return url.endsWith("/tasks")?Response.json({tasks:[]}):Response.json({id:10,path:`LinkBox-${state.publicId}`,size:0,files:[],folders:[]});};
+ const response=await worker.fetch(new Request("http://localhost/api/downloads"),state.env);assert.equal(response.status,200);
+ const [file]=await response.json();assert.equal(file.status,"failed");assert.match(file.errorMessage,/did not confirm/);assert.equal(file.displayName,"Test file");
+ assert.equal(file.createdAt,state.row.createdAt);assert.equal(file.expiresAt,state.row.expiresAt);assert.equal(file.taskMissing,undefined);assert.equal(file.seedrItemId,undefined);
+ await worker.fetch(new Request("http://localhost/api/downloads"),state.env);assert.equal(calls,2);
+ assert.equal((await state.db.findByPublicId(state.publicId)).deletedAt,null);
+ }finally{globalThis.fetch=original;state.sqlite.close();}
+});
+
+test("brief missing-task reconciliation remains pending; actual slow transfers survive metadata timeout",async()=>{
+ const original=globalThis.fetch;
+ for(const [minutes,task] of [[1,null],[20,{size:1024,progress:0,state:"queued"}],[20,{size:1024,progress:1.6,state:"downloading"}]]){
+ const state=await pendingFixture(minutes);
+ try{globalThis.fetch=async(url,options)=>{assert.equal(options.method,"GET");
+ if(url.endsWith("/tasks"))return Response.json({tasks:task?[{id:20,folder_id:10}]:[]});
+ if(url.endsWith("/tasks/20"))return Response.json({task:{id:20,folder_id:10,name:"Slow sample",error:null,...task}});
+ return Response.json({id:10,path:`LinkBox-${state.publicId}`,size:0,files:[],folders:[]});};
+ const [file]=await(await worker.fetch(new Request("http://localhost/api/downloads"),state.env)).json();assert.notEqual(file.status,"failed");assert.equal(file.progress,task?.progress??0);
+ }finally{globalThis.fetch=original;state.sqlite.close();}
+ }
+});
+
+test("metadata timeout bounds existing zero-size task and repeated outages, without deleting source content",async()=>{
+ const original=globalThis.fetch;
+ for(const outage of [false,true]){const state=await pendingFixture(16);
+ try{globalThis.fetch=async(url,options)=>{assert.equal(options.method,"GET");if(outage)return new Response(null,{status:503});
+ if(url.endsWith("/tasks"))return Response.json({tasks:[{id:20,folder_id:10}]});
+ if(url.endsWith("/tasks/20"))return Response.json({task:{id:20,folder_id:10,name:"Waiting sample",size:0,state:"queued",progress:0,error:null}});
+ return Response.json({id:10,path:`LinkBox-${state.publicId}`,size:0,files:[],folders:[]});};
+ const [file]=await(await worker.fetch(new Request("http://localhost/api/downloads"),state.env)).json();assert.equal(file.status,"failed");assert.match(file.errorMessage,/15 minutes/);assert.equal(file.deletedAt,null);
+ }finally{globalThis.fetch=original;state.sqlite.close();}}
+});
+
+test("resolved 8 GB item is stopped on 5 GB account even when app maximum is 10 GB",async()=>{
+ const state=await pendingFixture(1,{}, {MAX_FILE_SIZE_BYTES:String(10*1024**3)}),original=globalThis.fetch,deleted=[];
+ try{await state.db.syncAccounts([{...account,capacityBytes:5*1024**3,usedBytes:0,availableBytes:5*1024**3,lastSyncedAt:new Date().toISOString()},
+ {...account,id:"b",capacityBytes:4.5*1024**3,usedBytes:0,availableBytes:4.5*1024**3,lastSyncedAt:new Date().toISOString()}]);
+ globalThis.fetch=async(url,options)=>{
+ const path=new URL(url).pathname.replace("/api/v0.1/p","");
+ if(options.method==="DELETE"){deleted.push(path);return Response.json({success:true});}
+ if(path==="/tasks")return Response.json({tasks:[{id:20,folder_id:10}]});
+ if(path==="/tasks/20")return Response.json({task:{id:20,folder_id:10,name:"Large authorized archive",size:8*1024**3,state:"downloading",progress:1.6,error:null}});
+ return Response.json({id:10,path:`LinkBox-${state.publicId}`,size:0,files:[],folders:[]});};
+ const [file]=await(await worker.fetch(new Request("http://localhost/api/downloads"),state.env)).json();assert.equal(file.status,"failed");assert.equal(file.sizeBytes,8*1024**3);assert.match(file.errorMessage,/too large.*storage account/);assert.match(file.errorMessage,/removed/);
+ assert.deepEqual(deleted,["/tasks/20","/fs/folder/10"]);assert.equal((await state.db.findByPublicId(state.publicId)).cleanupClaimedAt,null);
+ await worker.fetch(new Request("http://localhost/api/downloads"),state.env);assert.equal(deleted.length,2);
+ }finally{globalThis.fetch=original;state.sqlite.close();}
+});
+
+test("failed oversized removal remains visible and owner/Cron retryable",async()=>{
+ const state=await pendingFixture(1),original=globalThis.fetch;
+ try{globalThis.fetch=async(url,options)=>{
+ if(options.method==="DELETE")return new Response(null,{status:503});
+ if(url.endsWith("/tasks"))return Response.json({tasks:[{id:20,folder_id:10}]});
+ if(url.endsWith("/tasks/20"))return Response.json({task:{id:20,folder_id:10,name:"Large archive",size:8*1024**3,state:"downloading",progress:1,error:null}});
+ return Response.json({id:10,path:`LinkBox-${state.publicId}`,size:0,files:[],folders:[]});};
+ const [file]=await(await worker.fetch(new Request("http://localhost/api/downloads"),state.env)).json();assert.equal(file.status,"failed");assert.match(file.errorMessage,/Removal could not finish/);
+ const stored=await state.db.findByPublicId(state.publicId);assert.equal(stored.cleanupClaimedAt,null);assert.equal(stored.deletedAt,null);assert.match(stored.seedrItemId,/:10:20$/);
+ assert.ok(await state.db.claimForCleanup(state.publicId,stored.expiresAt));
+ }finally{globalThis.fetch=original;state.sqlite.close();}
+});
+
+test("policy removal claim is atomic against duplicate polls, owner deletion, Cron and stale item IDs",async()=>{
+ const state=await pendingFixture(1,{ownerSessionHash:"a".repeat(64)}),second=new D1MetadataDatabase(state.binding);
+ try{const timestamp=new Date().toISOString();assert.equal(await state.db.claimForFailure(state.publicId,timestamp,"stale-item-id"),null);
+ const outcomes=await Promise.all([state.db.claimForFailure(state.publicId,timestamp,state.row.seedrItemId),second.claimForFailure(state.publicId,timestamp,state.row.seedrItemId)]);
+ assert.equal(outcomes.filter(Boolean).length,1);const claimed=outcomes.find(Boolean);
+ assert.equal(await second.claimForCleanup(state.publicId,timestamp,state.row.ownerSessionHash),null);
+ assert.equal((await state.db.update({...state.row,status:"downloading"})).status,"deleting");
+ await state.db.update({...claimed,status:"failed",cleanupClaimedAt:null,errorMessage:"Size limit exceeded"},claimed.cleanupClaimedAt);
+ assert.ok(await second.claimForCleanup(state.publicId,timestamp,state.row.ownerSessionHash));
+ }finally{state.sqlite.close();}
+});
+
+test("JSON-rejected submission is terminal immediately rather than uncertain metadata",async()=>{
+ const {sqlite,binding}=setup(),original=globalThis.fetch;
+ try{const env=adminEnv(binding),session="12345678-1234-4234-8234-123456789012";
+ globalThis.fetch=async(url,options)=>{
+ if(url.endsWith("/me/quota"))return Response.json({space_max:5*1024**3,space_used:0});
+ if(url.endsWith("/fs/folder"))return Response.json({id:10,success:true});
+ assert.ok(url.endsWith("/tasks"));assert.equal(options.method,"POST");return Response.json({success:false,error:"private quota details"});};
+ const response=await worker.fetch(new Request("https://worker.example/api/downloads",{method:"POST",headers:{origin:"https://app.example","x-session-id":session,"content-type":"application/json"},body:JSON.stringify({magnet:"magnet:?xt=urn:btih:"+"a".repeat(40)})}),env);
+ assert.equal(response.status,201);const file=await response.json();assert.equal(file.status,"failed");assert.match(file.errorMessage,/could not accept/);assert.ok(!JSON.stringify(file).includes("private quota details"));assert.equal(file.canDelete,true);
+ }finally{globalThis.fetch=original;sqlite.close();}
+});
+
 test("owner-only D1 deletion is immediate and atomic, not for strangers or legacy items",async()=>{
  const {sqlite,db}=setup();try{await db.syncAccounts([account]);const owner="a".repeat(64),other="b".repeat(64);
  const row=await db.create(fixture(1,{ownerSessionHash:owner,status:"downloading"}));
@@ -215,6 +314,21 @@ test("D1 stale progress cannot undo a cleanup claim or resurrect deletion", asyn
     await db.create(fixture(4, { magnetHash: stale.magnetHash })); // duplicate allowed after deletion
   } finally { sqlite.close(); }
 });
+test("D1 stale progress cannot revive terminal failure; owner cleanup still works", async () => {
+  const { sqlite, db } = setup();
+  try {
+    await db.syncAccounts([account]);
+    const stale = await db.create(fixture(1, {status:"fetching_metadata",sizeBytes:0,progress:0,ownerSessionHash:"a".repeat(64)}));
+    await db.update({...stale,status:"failed",errorMessage:"Metadata unavailable"});
+    for (const status of ["queued","fetching_metadata","downloading","processing","ready"]) {
+      const current=await db.update({...stale,status,progress:20});
+      assert.equal(current.status,"failed");assert.equal(current.errorMessage,"Metadata unavailable");
+    }
+    const deleted=await deleteOwnedItem(db,{async deleteItem(){}},stale.publicId,now,stale.ownerSessionHash);
+    assert.equal(deleted.status,"deleted");
+  } finally { sqlite.close(); }
+});
+
 test("D1 remote cleanup failure releases only its own claim for retry", async () => {
   const { sqlite, db } = setup();
   try {

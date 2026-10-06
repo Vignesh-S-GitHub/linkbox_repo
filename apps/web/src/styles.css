@@ -103,6 +103,8 @@ small { font-size:12px; color:var(--lb-muted); line-height:1.5; }
 .file-meta { display:flex; flex-direction:column; gap:3px; min-width:0; flex:1; }
 .file-meta strong { display:block; font-size:13px; font-weight:600; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .file-meta small { font-size:11px; }
+.file-meta .file-error { color:var(--lb-danger); line-height:1.5; overflow-wrap:anywhere; }
+.download-failed-heading { display:flex; align-items:center; gap:9px; color:var(--lb-danger); margin-top:24px; }
 .file-meta em { color:#009D74; font-style:normal; }
 .row-size { font-size:11px; color:var(--lb-muted); white-space:nowrap; }
 .row-tools { display:flex; align-items:center; gap:5px; }
