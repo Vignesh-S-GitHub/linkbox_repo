@@ -512,6 +512,28 @@ test("101-character account labels reject before contacting Seedr or writing D1"
  assert.equal(accountsFromEnv({SEEDR_ACCOUNT_CONFIG:JSON.stringify([{...configA,label:"A".repeat(100)}])})[0].label.length,100);
  }finally{globalThis.fetch=original;sqlite.close();}
 });
+
+test("confirmed task token rejection fails immediately without replaying or deleting the reservation",async()=>{
+ const original=globalThis.fetch;
+ for(const status of [401,403]){
+  const {sqlite,db,binding}=setup();let taskPosts=0;
+  try{
+   globalThis.fetch=async(url,options)=>{
+    const path=new URL(url).pathname.replace("/api/v0.1/p","");
+    if(path==="/me/quota")return Response.json({space_max:5000,space_used:0});
+    if(path==="/fs/folder"&&options.method==="POST")return Response.json({id:101});
+    if(path==="/tasks"&&options.method==="POST"){taskPosts++;return new Response("private provider token body",{status});}
+    assert.fail("A confirmed rejection must not retry, delete or keep polling");
+   };
+   const env=adminEnv(binding),request=new Request("https://worker.example/api/downloads",{method:"POST",headers:{origin:"https://app.example","x-session-id":crypto.randomUUID(),"content-type":"application/json"},body:JSON.stringify({magnet:"magnet:?xt=urn:btih:"+"f".repeat(40)})});
+   const response=await worker.fetch(request,env);assert.equal(response.status,201);
+   const created=await response.json();assert.equal(created.status,"failed");assert.match(created.errorMessage,/token permissions/);
+   assert.ok(!JSON.stringify(created).includes("private provider"));assert.equal(taskPosts,1);
+   const stored=await db.findByPublicId(created.id);assert.match(stored.seedrItemId,/:101:0$/);assert.equal(stored.deletedAt,null);assert.ok(stored.ownerSessionHash);
+   const [file]=await(await worker.fetch(new Request("https://worker.example/api/downloads"),env)).json();assert.equal(file.status,"failed");assert.match(file.errorMessage,/token permissions/);assert.equal(taskPosts,1);
+  }finally{globalThis.fetch=original;sqlite.close();}
+ }
+});
 test("D1 raw provider errors never appear in public database errors", async () => {
   const db = new D1MetadataDatabase({ prepare() { throw new Error("private SQL and internal identifier"); } });
   await assert.rejects(db.listActive(), e => e.code === "database_unavailable" && !e.message.includes("private"));

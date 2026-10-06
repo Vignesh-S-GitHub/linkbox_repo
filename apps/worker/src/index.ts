@@ -161,7 +161,10 @@ async function createDownload(request: Request, env: Env) {
       // Persist uncertain acceptance instead of blindly replaying POST. Polling
       // recovers by the exact app folder; Cron can clean abandoned reservations.
       const rejected = error instanceof ApiProblem && error.status === 409;
-      row = await database.update({ ...row, status: rejected ? "failed" : "fetching_metadata", errorMessage: rejected ? rejectionMessage : "Submission confirmation is delayed. Progress will retry automatically." });
+      const permissionRejected = error instanceof ApiProblem && error.code === "seedr_token_rejected";
+      row = await database.update({ ...row, status: rejected || permissionRejected ? "failed" : "fetching_metadata", errorMessage: permissionRejected
+        ? "Seedr rejected the account token permissions for this action. Ask the administrator to check the token's file and download permissions, then delete this item before retrying."
+        : rejected ? rejectionMessage : "Submission confirmation is delayed. Progress will retry automatically." });
     }
     return publicDownload(row,true);
   } finally { await database.releaseLease("submission", lock); }

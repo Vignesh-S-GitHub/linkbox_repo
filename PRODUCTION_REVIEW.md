@@ -16,6 +16,7 @@ This review reduces identified risks; it cannot guarantee zero future failures. 
 | Browser HTTP calls could hang indefinitely or encourage duplicate POST retries | 60-second read / 120-second write timeouts; uncertain writes explicitly advise checking Files; no automatic POST retry |
 | Repeated rejected full-storage attempts could call Seedr quota before cooldown | Session/IP cooldown moved before quota/metadata requests, after duplicate checking |
 | Account labels accepted 128 characters but D1 permitted only 100 | API, configuration and input consistently use the database's 100-character limit |
+| Confirmed task-token permission rejection was treated as uncertain acceptance | 401/403-derived permission errors fail immediately with a safe message; no replay or automatic cross-account retry |
 | Blocked local storage could crash preference/identity initialization | Safe storage access and in-memory session fallback; permission-loss limitations documented |
 | Static frontend lacked a restrictive security policy | Pages CSP, frame denial, MIME protection, referrer policy and disabled camera/mic/location |
 | Known vulnerable source-map and local-runtime transitive packages | Targeted compatible patch overrides and lockfile; high-severity npm audit added to CI |
@@ -30,7 +31,7 @@ The canonical offline HTML is installed together with its versioned bundles and 
 
 ## Verification
 
-- Lint and TypeScript checking of frontend, Worker and shared types; 128 automated tests passed (45 business, 37 D1, 15 live-adapter fixture, 14 connection helper, 3 admin helper and 14 web/PWA).
+- Lint and TypeScript checking of frontend, Worker and shared types; 129 automated tests passed (45 business, 38 D1, 15 live-adapter fixture, 14 connection helper, 3 admin helper and 14 web/PWA).
 - Business/security tests and real SQLite execution of the D1 migration/statements, including races, ownership, fair polling, provider failures, contiguous account fit, metadata timeouts and exact expiry.
 - Web safety/PWA tests for request timeout/cancellation, no POST replay, stale-refresh rejection, blocked storage, cache exclusions, offline shell, MIME rejection, scoped cache cleanup, explicit update activation, one-shot install prompt and actual icon dimensions.
 - Frontend production build and Worker deployment dry-run, without production writes.
