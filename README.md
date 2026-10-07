@@ -1,6 +1,31 @@
-# LinkBox
+<div align="center">
 
-A mobile-first temporary shared-download app using the approved LinkBox assets. The UI is unchanged by the database migration.
+# 📦 LinkBox
+
+### Temporary shared downloads, built for the browser
+
+**React · TypeScript · Cloudflare Pages & Workers · D1 · Seedr**
+
+[Architecture](#architecture) · [Local setup](#local-development) · [Configuration](#environment-configuration) · [Deployment](#cloudflare-pages-deployment) · [Troubleshooting](#troubleshooting)
+
+</div>
+
+LinkBox is a mobile-first app for submitting magnets, tracking downloads, browsing files, and playing or downloading supported media. Downloaded files stay on Seedr; Cloudflare provides the interface, API, metadata, and scheduled cleanup.
+
+## ✨ At a glance
+
+| Capability | What it does |
+|---|---|
+| 🧲 Submit & track | Real magnet submission with progress and clear failure states |
+| 📂 Browse & download | Folder browsing, native previews, and individual file downloads |
+| ▶️ Play media | HLS or native playback when the provider and browser support it |
+| ⏳ Temporary sharing | Creator deletion anytime; shared deletion after 3 hours; expiry after 24 hours |
+| ☁️ Manage capacity | Actual Seedr quotas, metadata in D1, and private owner account controls |
+| 📱 Install as an app | PWA installation with a cached interface shell; file operations require internet |
+
+## 📚 Documentation
+
+[Local testing](LOCAL_TESTING.md) · [Seedr setup](SEEDR_LOCAL_SETUP.md) · [Production review](PRODUCTION_REVIEW.md) · [V1 verification](V1_VERIFICATION.md)
 
 ## Current status
 
@@ -40,7 +65,7 @@ The old Supabase runtime adapter and environment requirements were removed. Hist
 Use a current supported Node.js version with `node:sqlite` (Node 22.13+ or newer) and npm. This project's SQL tests run directly against SQLite without installing another database package.
 
 ```powershell
-cd C:\Users\shanm\Projects\LinkBox
+cd linkbox_repo
 npm ci --cache .npm-cache
 npm run db:migrate:local
 npm run dev
@@ -101,7 +126,7 @@ For compatibility with already-applied migrations, the legacy `cleanup_allowed_a
 The connected account already has `linkbox-metadata`, bound as `DB` in both Wrangler environments. Do not create a duplicate database. For a different Cloudflare account, use:
 
 ```powershell
-cd C:\Users\shanm\Projects\LinkBox\apps\worker
+cd apps/worker
 npx wrangler login
 npx wrangler d1 create linkbox-metadata
 ```
@@ -111,7 +136,7 @@ For a different account, replace `account_id` and **both** `database_id` values 
 Then apply the active D1 migration remotely:
 
 ```powershell
-cd C:\Users\shanm\Projects\LinkBox
+cd linkbox_repo
 npm run db:migrate:remote
 ```
 
@@ -153,7 +178,7 @@ Default and production configuration both specify `0 * * * *` (hourly UTC). The 
 For a separate local Cron test, stop the running Worker first:
 
 ```powershell
-cd C:\Users\shanm\Projects\LinkBox\apps\worker
+cd apps/worker
 npm run dev:cron
 # In another terminal:
 Invoke-WebRequest 'http://localhost:8787/__scheduled?cron=0+*+*+*+*'
@@ -186,7 +211,7 @@ Use mock mode for safe synthetic cleanup tests. In current Wrangler, you can als
 First, apply the metadata migration and configure owner access from your local repository:
 
 ```powershell
-cd C:\Users\shanm\Projects\LinkBox
+cd linkbox_repo
 npm run db:migrate:remote
 npm run admin:setup:production
 ```
@@ -196,7 +221,7 @@ The helper prompts with hidden input. Choose a unique random 32–128 character 
 To connect a **different** Seedr account:
 
 ```powershell
-cd C:\Users\shanm\Projects\LinkBox\apps\worker
+cd apps/worker
 npx wrangler secret put SEEDR_ACCOUNT_B_TOKEN --env production
 ```
 
