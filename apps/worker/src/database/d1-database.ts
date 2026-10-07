@@ -173,14 +173,15 @@ export class D1MetadataDatabase implements Database {
     return row ? mapRow(row) : null;
   }
 
-  async claimForCleanup(publicId: string, now: string, ownerSessionHash?: string): Promise<DownloadRow | null> {
+  async claimForCleanup(publicId: string, now: string, mode: "manual" | "expired" = "expired", ownerSessionHash: string | null = null): Promise<DownloadRow | null> {
     // One conditional statement, not SELECT then UPDATE: atomic across all Workers.
     const row = await this.query(() => this.db.prepare(`UPDATE downloads
       SET status='deleting', cleanup_claimed_at=?1, updated_at=?1
       WHERE public_id=?2 AND deleted_at IS NULL
         AND (cleanup_claimed_at IS NULL OR cleanup_claimed_at<=?3)
-        AND ((?4 IS NULL AND expires_at<=?1) OR (?4 IS NOT NULL AND owner_session_hash=?4))
-      RETURNING ${columns}`).bind(now, publicId, new Date(Date.parse(now)-300000).toISOString(), ownerSessionHash ?? null).first<StoredRow>());
+        AND ((?4='expired' AND expires_at<=?1) OR
+          (?4='manual' AND (cleanup_allowed_at<=?1 OR (?5 IS NOT NULL AND owner_session_hash=?5))))
+      RETURNING ${columns}`).bind(now, publicId, new Date(Date.parse(now)-300000).toISOString(), mode, ownerSessionHash).first<StoredRow>());
     return row ? mapRow(row) : null;
   }
 

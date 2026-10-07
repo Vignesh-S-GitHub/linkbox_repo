@@ -4,7 +4,7 @@ A mobile-first temporary shared-download app using the approved LinkBox assets. 
 
 ## Current status
 
-LinkBox V1 supports real magnet submission, progress, folder browsing, HLS/native media playback, direct file downloads, owner-only deletion at any time, and automatic expiry after 24 hours. There is no 3-hour lock or community deletion. The approved visual design remains unchanged. Your single account uses its **actual Seedr quota**, not the 9.5 GB demo pool. Only downloads created through LinkBox are shared or cleanup-managed; existing personal Seedr files are not imported.
+LinkBox V1 supports real magnet submission, progress, folder browsing, HLS/native media playback, direct file downloads, shared deletion after a **3-hour protection period**, and automatic expiry after 24 hours. The submitting browser can delete its own download anytime; other users must wait 3 hours. The approved visual design remains unchanged. Connected accounts use their **actual Seedr quota**, not the 9.5 GB demo pool. Only downloads created through LinkBox are shared or cleanup-managed; existing personal Seedr files are not imported.
 
 **Supabase is no longer used.** Cloudflare Pages serves the frontend, Workers runs the privileged API, **D1 stores metadata**, and Worker Cron Triggers schedule cleanup. Actual downloaded files stay exclusively on Seedr. No media is stored in Pages, Workers, D1, GitHub or an R2 bucket.
 
@@ -25,7 +25,7 @@ Pages provides a static frontend without a running server. Workers keeps tokens 
 apps/web/                    React, Vite, TypeScript, Tailwind and brand assets
 apps/worker/src/database/    D1 implementation; in-memory mock implementation
 apps/worker/src/seedr/       Mock/live adapters, verified PAT API and ownership checks
-apps/worker/src/cleanup/     Owner deletion and automatic expiry logic
+apps/worker/src/cleanup/     Protected shared deletion and automatic expiry logic
 apps/worker/migrations/      Active Cloudflare D1 SQLite migrations
 apps/worker/wrangler.toml    Local/production D1 bindings, vars and hourly Cron
 packages/shared/            Public API types (no tokens or internal account IDs)
@@ -84,8 +84,8 @@ Use this synthetic hash only in mock mode. Mock downloads are labelled text fixt
 - The 9.5 GB logical pool exists only in the original two-account mock configuration.
 - An entire item must fit one account; combined free space is never treated as contiguous.
 - Known-size account selection uses best fit. Seedr has no documented size-only magnet preflight: unknown-size tasks choose the account with most free space, one transferring item per account, and rely on Seedr to reject an item that cannot fit. `xl` is never trusted. After metadata resolves, oversized app-owned content is stopped/removed and marked failed. Exact requested/free/shortfall numbers are shown only when size is known; unknown-size errors say metadata is pending.
-- Owners can delete their own downloads immediately, with the existing confirmation. Other visitors cannot manually delete them at any age. At 24 hours, automatic deletion is due.
-- When storage is full, open Files to delete your own items or wait for expiration. The former community `POST /api/downloads/:id/cleanup` endpoint is removed (404 in full/mock mode); old clients cannot bypass ownership through it.
+- Downloads are protected from other users for 3 hours. The creator can delete anytime using the same private browser session. After 3 hours anyone can delete, with the existing confirmation. At 24 hours, automatic deletion is due.
+- When storage is full, open Files to delete an eligible item or wait for protection/expiration. The obsolete `POST /api/downloads/:id/cleanup` endpoint remains removed (404); the single Delete endpoint enforces the 3-hour lock.
 - D1 enforces lifecycle timestamps, foreign keys, status/progress constraints and active-magnet uniqueness.
 - One conditional SQL `UPDATE … RETURNING` atomically claims cleanup across Worker instances.
 - Progress updates cannot undo claims or resurrect deleted records.
@@ -204,7 +204,7 @@ Paste the PAT only into Wrangler's private prompt, not Settings, source code or 
 
 Only metadata (label, enabled flag, actual capacity and secret reference) is stored in D1's `account_configuration` table. Credentials remain in Worker Secrets. The existing Wrangler account is the baseline; D1 overrides its enabled flag and adds accounts. Redeploying does not discard these additions. Changes serialize with submissions/deletions using the existing D1 lease. Identical tokens under different secret names are rejected; the verified quota response does **not** identify an account, so two different tokens for the same account cannot be detected automatically. The distinct-account confirmation is required to avoid double-counting. Do not register another PAT for an existing account.
 
-**Accept new downloads** disables admissions only. Existing downloads remain playable/downloadable, owner-deletable and eligible for 24-hour Cron expiry. Keep disabled accounts' secrets until all their files expire; do not delete/rename those bindings. At least one account must stay enabled. Refresh performs at most one quota request per enabled account and is throttled to 15 seconds; ordinary public storage remains cached for 60 seconds. Account removal/token editing in the browser is deliberately not supported.
+**Accept new downloads** disables admissions only. Existing downloads remain playable/downloadable, deletable anytime by their creator or after 3 hours by others, and eligible for 24-hour Cron expiry. Keep disabled accounts' secrets until all their files expire; do not delete/rename those bindings. At least one account must stay enabled. Refresh performs at most one quota request per enabled account and is throttled to 15 seconds; ordinary public storage remains cached for 60 seconds. Account removal/token editing in the browser is deliberately not supported.
 
 For local owner testing, run `npm run admin:setup`, add the additional PAT privately to ignored `apps/worker/.dev.vars` under the matching secret name, and restart the Worker. Local D1 and production D1 are separate: connecting an account locally does not connect it in production. Mock mode uses simulated quota and files, never requests Seedr, and resets metadata on restart; synthetic secret values can be used for mock account tests.
 
@@ -226,11 +226,11 @@ Live magnets have no documented authoritative size-only preflight. A valid magne
 
 Confirmed HTTP/JSON rejections become **Failed** immediately. An empty owned folder with no matching task gets a five-minute admission grace period, then becomes **Failed** rather than looping forever. Unknown zero-size/zero-progress metadata admission times out after fifteen minutes, including repeated provider errors. These deadlines are checked during normal progress polling; they are not precise background timers. Real downloads with resolved size/progress are not cancelled merely for having few peers. Missing tasks and metadata timeouts do not delete provider content automatically: the owner can use **Delete**, and the existing 24-hour Cron expiry remains in effect. Delete a failed record before resubmitting the same magnet.
 
-Known oversized tasks are stopped only beneath their verified LinkBox-owned folder, under the same atomic D1 cleanup claim used by owner deletion and Cron. A failure to remove provider content is clearly reported and retains the record for owner/Cron retry. Failed rows have no animated progress timeline, show a safe reason directly in the list and details, and unknown size is labelled **Size unknown**. No new Seedr endpoint, credential access, media proxy or paid service is added.
+Known oversized tasks are stopped only beneath their verified LinkBox-owned folder, under the same atomic D1 cleanup claim used by manual deletion and Cron. A failure to remove provider content is clearly reported and retains the record for shared deletion after 3 hours or Cron retry. Failed rows have no animated progress timeline, show a safe reason directly in the list and details, and unknown size is labelled **Size unknown**. No new Seedr endpoint, credential access, media proxy or paid service is added.
 
 #### Delete a mistakenly added magnet
 
-For newly submitted downloads, open the file's menu (⋮) and choose the single red **Delete** action, or use that option on its progress page. Confirming stops the task and deletes the entire LinkBox-managed download, including its folder contents and shared access. This is permanent, not an undo/trash feature. There is no “Not available” menu action; unavailable files still have a real error page.
+Open the file's menu (⋮) or its progress page. The submitting browser gets the single red **Delete** action immediately. Other browsers see **Protected** and the remaining wait during the first 3 hours; afterward any browser can delete. Confirming stops the task and deletes the entire LinkBox-managed download, including its folder contents and shared access. This is permanent, not an undo/trash feature. There is no “Not available” menu action; unavailable files still have a real error page.
 
 ### Original-quality external playback
 
@@ -238,9 +238,9 @@ For a ready individual file, open its menu (⋮) and choose **Copy download link
 
 Original resolution/audio tracks depend on the source file and your external player's codec support and connection. Copying a URL does not upscale or transcode it. Links are temporary bearer capabilities: keep them private, copy a fresh one if Seedr expires it, and download before the 24-hour deadline. **Share** still shares the LinkBox page, not this direct file URL. Clipboard failures show a safe inline error; URLs are never logged or saved to browser storage. Folder-wide archive links are not invented.
 
-Only the originating browser can use `POST /api/downloads/:id/delete`, at any time without an age lock. A random browser UUID is a private bearer capability; D1 stores only its SHA-256 digest (`0004_download_owner.sql`). Responses include a request-specific `canDelete` boolean, never the UUID or digest. Do not share this browser session value. Clearing browser storage, switching browsers/devices, or losing that value loses manual-delete authority. Historical records have no trustworthy owner and are deliberately not claimed retroactively; automatic expiration still applies.
+Any browser can use `POST /api/downloads/:id/delete` once `cleanup_allowed_at` (creation + 3 hours) is reached. Before then, only the submitting browser can delete, verified by its private session UUID against the stored SHA-256 owner digest. Other browsers receive `403 file_protected`, including for failed/pending downloads. The atomic database claim rechecks this permission. Existing dates remain unchanged; legacy records without an owner digest cannot claim creator access. Clearing browser data or changing devices loses immediate deletion access. Anonymous sessions remain required for request limiting. Responses expose only the safe deadline and request-specific `canDelete` eligibility, never the session UUID or digest.
 
-The Worker verifies ownership and atomically claims deletion in D1. Repeated owner requests are idempotent, competing requests do not double-delete, failed provider deletion remains retryable, and deletion is blocked while a submission is still being admitted/checkpointed. Other browsers cannot manually delete someone else's download, before or after three hours. No login, paid service, new Seedr endpoint, or account-wide deletion is introduced.
+The Worker checks creator ownership or age, and D1 atomically rechecks that permission when claiming deletion. Repeated requests are idempotent, competing requests do not double-delete, failed provider deletion remains retryable, and deletion is blocked while a submission is still being admitted/checkpointed. Cron still claims only downloads expired after 24 hours. Existing automatic rejection/removal of unsupported oversized tasks is unchanged. No login, paid service, new Seedr endpoint, migration or account-wide deletion is introduced. This is shared storage: another visitor may permanently remove an eligible download, so save anything you need promptly.
 
 - API Console's **endpoint form** documents `POST /tasks` JSON fields `torrent_magnet` and `folder_id`. Its generic code example uses obsolete `url` / `save_folder_id`; those returned HTTP 422 and are not used.
 - `POST /fs/folder` uses `name` / `parent_id`. The task's `folder_id` must match the isolated parent; completed content is traversed only beneath that parent. IDs are not interchangeable.
@@ -278,7 +278,7 @@ npm test
 npm run build
 ```
 
-Tests include existing mock API/business coverage, private-token setup, and real SQLite execution of the D1 schema/queries: account upserts, constraints, injection-safe bindings, owner deletion without an age lock, removed community routes, exact 24-hour expiry, duplicate prevention, concurrent cleanup, stale progress, failed cleanup retry and idempotent expiry. SQLite tests do not replace Wrangler-runtime and credential-dependent end-to-end tests.
+Tests include existing mock API/business coverage, private-token setup, and real SQLite execution of the D1 schema/queries: account upserts, constraints, injection-safe bindings, exact 3-hour protection and shared deletion, removed legacy cleanup routes, exact 24-hour expiry, duplicate prevention, concurrent cleanup, stale progress, failed cleanup retry and idempotent expiry. SQLite tests do not replace Wrangler-runtime and credential-dependent end-to-end tests.
 
 ## Troubleshooting
 
@@ -299,7 +299,9 @@ After this update is deployed, open **Settings → LinkBox app**. On compatible 
 
 This is a progressive web app (PWA), not a Play Store, App Store or Microsoft Store package. HTTPS is required, except for localhost testing. Install prompts and standalone behaviour depend on the browser/device; the in-app testing browser may show only manual instructions. See [MDN installability guidance](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Making_PWAs_installable).
 
-The approved LinkBox icons and theme are reused. No additional paid service or PWA library is required. `npm run build` generates a versioned service worker from the public template and the hashed Vite assets. Registration is disabled on the Vite development server; use a production build/preview or Pages to test installation.
+The approved website logo and theme remain unchanged. Installed-app icons use padded, opaque 192px/512px exports with both regular and maskable manifest entries, plus a 180px Apple touch icon. The complete cloud and box point fit inside the central circular safe area; tests check every export. See [app-icon asset notes](apps/web/public/brand/02_app_icons/APP-ICON-NOTES.md). No additional paid service or PWA library is required. `npm run build` generates a versioned service worker from the public template and the hashed Vite assets. Registration is disabled on the Vite development server; use a production build/preview or Pages to test installation.
+
+An existing installation may retain its old launcher icon until the browser/OS updates it. After deploying, first reopen the app and accept its available update. If the icon still remains old, reinstall only after finishing any creator-only actions you need: uninstalling or clearing local data can lose the private browser session used for immediate deletion. This does not change the 3-hour shared-deletion deadline or 24-hour expiry.
 
 ### Offline, updates and privacy
 
@@ -307,7 +309,7 @@ Only the public HTML/JS/CSS shell, manifest and brand images are cached. **API r
 
 New app versions wait until old windows close, or until you choose **Settings → Update app & reload**. Finish submissions/playback before requesting an update. No update automatically reloads an active video. If you intentionally activate an update, other open app windows may need a reload, especially offline. Static cache size is bounded; browser storage eviction can remove it at any time.
 
-Use the same browser/profile to retain permission to delete your own downloads. Installed apps—particularly Safari home-screen apps—may use a separate storage context. Clearing/denying storage, switching profiles/devices, or reinstalling can lose owner permission. There is no login-based recovery in V1; the 24-hour automatic cleanup still applies. Do not share the browser identifier or private admin key. Admin authentication remains in memory and locks when the page is hidden.
+Manual deletion is available immediately to the submitting browser and to any browser after the 3-hour protection period; switching profiles/devices does not grant creator access. Installed apps may use a separate storage context for appearance and request-limiting identifiers. Do not share the browser identifier or private admin key. Admin authentication remains in memory and locks when the page is hidden. Automatic cleanup still runs after 24 hours.
 
 ### Production review and maintenance
 

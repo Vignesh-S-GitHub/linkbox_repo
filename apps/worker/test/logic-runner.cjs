@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const { selectAccount } = require("./logic-test-build/apps/worker/src/storage/account-selection.js");
 const { validateMagnet, magnetIdentity } = require("./logic-test-build/apps/worker/src/utils/magnet.js");
 const { MockDatabase } = require("./logic-test-build/apps/worker/src/database/mock-database.js");
-const { deleteOwnedItem, expireDueItems } = require("./logic-test-build/apps/worker/src/cleanup/cleanup-service.js");
+const { deleteSharedItem, expireDueItems } = require("./logic-test-build/apps/worker/src/cleanup/cleanup-service.js");
 const { MockSeedrAdapter } = require("./logic-test-build/apps/worker/src/seedr/mock-adapter.js");
 const { LiveSeedrAdapter } = require("./logic-test-build/apps/worker/src/seedr/live-adapter.js");
 const { SeedrTokenClient, parseQuota } = require("./logic-test-build/apps/worker/src/seedr/token-client.js");
@@ -92,15 +92,43 @@ test("clipboard and expired delivery failures never report successful copying",a
  class Item{constructor(parts){this.parts=parts;}}
  await assert.rejects(copyDownloadLink(async()=>{throw failure;},{writeText:async()=>{},write:async()=>{throw new Error("permission denied");}},Item),/permission denied/);
 });
-test("file actions use original delivery with scoped entry and only one owner Delete",()=>{
+test("file actions preserve original delivery and a single age-protected Delete",()=>{
  const fs=require("node:fs"),path=require("node:path");
  const app=fs.readFileSync(path.join(__dirname,"../../web/src/App.tsx"),"utf8");
  const sheet=fs.readFileSync(path.join(__dirname,"../../web/src/components/ActionsSheet.tsx"),"utf8");
  assert.match(app,/copyDownloadLink\(\(\) => api\.delivery\(file\.id, "download", child\?\.id\)/);
- assert.match(sheet,/Copy download link/);assert.match(sheet,/!entry&&file\.canDelete/);
- assert.equal((sheet.match(/onClick=\{onDelete\}/g)||[]).length,1);
+ const action=fs.readFileSync(path.join(__dirname,"../../web/src/components/DeleteAction.tsx"),"utf8");
+ assert.match(sheet,/Copy download link/);assert.match(sheet,/!entry&&<DeleteAction/);
+ assert.equal((action.match(/onClick=\{onDelete\}/g)||[]).length,1);
  assert.ok(!sheet.includes("Not available")&&!sheet.includes("Delete my download")&&!app.includes("onUnavailable="));
- assert.match(sheet,/<Trash2 size=\{19\}\/>Delete/);
+ assert.match(action,/<Trash2 size=\{19\}\/>Delete/);assert.match(action,/if\(file.canDelete!==true&&now<unlock\)return/);assert.match(action,/Protected/);
+});
+
+test("Delete UI lets creators delete immediately and shows other browsers a countdown until three hours",()=>{
+ const {readFileSync}=require("node:fs"),path=require("node:path"),{createRequire}=require("node:module"),vm=require("node:vm"),ts=require("typescript");
+ const actionPath=path.join(__dirname,"../../web/src/components/DeleteAction.tsx"),webRequire=createRequire(actionPath);
+ const react=webRequire("react"),{renderToStaticMarkup}=webRequire("react-dom/server");
+ function load(file){
+  const output=ts.transpileModule(readFileSync(file,"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,target:ts.ScriptTarget.ES2022}}).outputText;
+  const module={exports:{}};
+  vm.runInNewContext(output,{module,exports:module.exports,Date,require:specifier=>specifier.startsWith(".")?load(path.resolve(path.dirname(file),specifier)+".ts"):webRequire(specifier)});
+  return module.exports;
+ }
+ const {DeleteAction}=load(actionPath),now=Date.now();
+ const render=file=>renderToStaticMarkup(react.createElement(DeleteAction,{file,onDelete:()=>{},fullWidth:true}));
+ for(const hours of [0,2,2.999]){
+  const markup=render({...makeRow(new Date(now-hours*3600000).toISOString()),canDelete:false});
+  assert.match(markup,/Protected/);assert.match(markup,/Delete available in/);assert.ok(!markup.includes("<button"));
+  const creator=render({...makeRow(new Date(now-hours*3600000).toISOString()),canDelete:true});
+  assert.equal((creator.match(/<button/g)||[]).length,1);assert.match(creator,/>Delete<\/button>/);assert.ok(!creator.includes("Protected"));
+ }
+ for(const hours of [3,4]){
+  const markup=render({...makeRow(new Date(now-hours*3600000).toISOString()),canDelete:false});
+  assert.equal((markup.match(/<button/g)||[]).length,1);assert.match(markup,/unavailable-action full-width/);assert.match(markup,/>Delete<\/button>/);
+ }
+ assert.equal(render({...makeRow(new Date(now-4*3600000).toISOString()),deletedAt:new Date(now).toISOString()}),"");
+ assert.match(render({...makeRow(new Date(now-4*3600000).toISOString()),status:"deleting"}),/disabled/);
+ assert.ok(!render({...makeRow(new Date(now).toISOString()),cleanupAllowedAt:"invalid"}).includes("<button"));
 });
 
 test("authoritative type overrides names, including folders ending in media extensions",()=>{
@@ -235,13 +263,29 @@ test("automatic cleanup cannot claim any unexpired item, including after three h
     assert.equal(await db.claimForCleanup(id, now.toISOString()), null);
   }
 });
-test("owners can delete at any age without a three-hour lock", async () => {
+test("non-creators are protected until exactly three hours, then anyone can delete", async () => {
   const db = new MockDatabase(); const now = new Date("2026-09-28T12:00:00Z"), owner = "a".repeat(64);
-  for (const hours of [0, 2, 3, 4, 23]) {
+  for (const hours of [0, 2, 3-1/3600000, 3, 4, 23]) {
     const id = `owned-${hours}`; await db.create({...makeRow(new Date(now - hours * 3600000).toISOString(), id), ownerSessionHash: owner});
-    await assert.rejects(deleteOwnedItem(db, adapter, id, now.toISOString(), "b".repeat(64)), error => error.code === "not_download_owner");
-    assert.equal((await deleteOwnedItem(db, adapter, id, now.toISOString(), owner)).status, "deleted");
+    if(hours<3){
+      assert.equal(await db.claimForCleanup(id,now.toISOString(),"manual"),null);
+      await assert.rejects(deleteSharedItem(db,adapter,id,now.toISOString()),error=>error.code==="file_protected");
+    }else assert.equal((await deleteSharedItem(db,adapter,id,now.toISOString())).status,"deleted");
   }
+});
+test("only a matching creator digest bypasses the manual lock, never the automatic expiry deadline",async()=>{
+ const db=new MockDatabase(),now="2026-09-28T12:00:00.000Z",owner="a".repeat(64);
+ for(const status of ["queued","fetching_metadata","downloading","processing","ready","failed"]){
+  const id=`creator-${status}`;await db.create({...makeRow(now,id),status,ownerSessionHash:owner});
+  assert.equal(await db.claimForCleanup(id,now,"manual","b".repeat(64)),null);
+  assert.equal(await db.claimForCleanup(id,now,"expired",owner),null);
+  await assert.rejects(deleteSharedItem(db,adapter,id,now,"b".repeat(64)),e=>e.code==="file_protected");
+  assert.equal((await deleteSharedItem(db,adapter,id,now,owner)).status,"deleted");
+  assert.equal((await deleteSharedItem(db,adapter,id,now,owner)).status,"deleted");
+ }
+ await db.create(makeRow(now,"legacy"));
+ assert.equal(await db.claimForCleanup("legacy",now,"manual",owner),null);
+ await assert.rejects(deleteSharedItem(db,adapter,"legacy",now,owner),e=>e.code==="file_protected");
 });
 test("one cleanup claim wins a concurrent race", async () => {
   const db = new MockDatabase(); const now = new Date("2026-09-28T12:00:00Z"); await db.create(makeRow(new Date(now - 24 * 3600000).toISOString()));
@@ -257,10 +301,10 @@ test("remote deletion failure preserves metadata and releases the claim for retr
   const db = new MockDatabase(); const now = new Date("2026-09-28T12:00:00Z");
   const owner = "a".repeat(64);
   await db.create({...makeRow(new Date(now - 4 * 3600000).toISOString()), ownerSessionHash: owner});
-  await assert.rejects(deleteOwnedItem(db, { deleteItem: async () => { throw new Error("offline"); } }, "public", now.toISOString(), owner));
+  await assert.rejects(deleteSharedItem(db, { deleteItem: async () => { throw new Error("offline"); } }, "public", now.toISOString()));
   const row = await db.findByPublicId("public");
   assert.equal(row.deletedAt, null); assert.equal(row.cleanupClaimedAt, null); assert.equal(row.status, "ready");
-  assert.equal((await deleteOwnedItem(db, adapter, "public", now.toISOString(), owner)).status, "deleted");
+  assert.equal((await deleteSharedItem(db, adapter, "public", now.toISOString())).status, "deleted");
 });
 test("artifact screens and file-entry deep links round-trip", () => {
   for (const screen of screenNames) assert.equal(parseRoute(routeUrl(screen)).screen, screen);
@@ -335,7 +379,7 @@ test("Worker exposes only public metadata and correct 9.5 GB logical storage", a
   const files = await (await fetchApi("/api/downloads")).json();
   assert.equal(files.length, 5);
   assert.ok(files.every(file => !JSON.stringify(file).includes("seedrAccount") && !JSON.stringify(file).includes("seedrItem")));
-  assert.ok(files.every(file => !("cleanupAllowedAt" in file)));
+  assert.ok(files.every(file => Date.parse(file.cleanupAllowedAt)===Date.parse(file.createdAt)+10800000));
 });
 test("removed community cleanup returns 404 and not-ready playback remains blocked", async () => {
   for (const id of [fixtureId(1), fixtureId(2), fixtureId(3)]) {
@@ -361,7 +405,7 @@ test("storage-full reports contiguous space without offering other users' files 
   assert.equal(details.availableBytes, 1.9 * gib);
   assert.deepEqual(Object.keys(details).sort(), ["availableBytes", "requestedBytes"]);
   assert.equal((await fetchApi(`/api/downloads/${fixtureId(2)}/cleanup`, { method: "POST" })).status, 404);
-  assert.equal((await fetchApi(`/api/downloads/${fixtureId(2)}/delete`, { method: "POST" })).status, 403);
+  assert.equal((await fetchApi(`/api/downloads/${fixtureId(5)}/delete`, { method: "POST" })).status, 403);
   assert.equal((await fetchApi("/api/downloads", { method: "POST", body: JSON.stringify({ magnet: magnet.replace(String(4 * gib), "1024") }) })).status, 201);
 });
 test("the same torrent with different display parameters is still a duplicate", async () => {
@@ -376,7 +420,7 @@ test("unapproved browser origins cannot mutate shared storage", async () => {
   assert.equal((await fetchApi(`/api/downloads/${fixtureId(3)}/cleanup`, { method: "POST", headers: { origin: "https://unapproved.example" } })).status, 403);
 });
 
-test("Worker immediate deletion is owner-only, private, confirmed by POST and idempotent",async()=>{
+test("Worker locks non-creators for three hours then allows shared idempotent deletion",async()=>{
  const owner="12345678-1234-4234-8234-123456789012",other="87654321-4321-4321-8321-210987654321";
  const magnet=`magnet:?xt=urn:btih:${"c".repeat(40)}&dn=Wrong%20link%20test.zip&xl=1024`;
  const created=await fetchApi("/api/downloads",{method:"POST",body:JSON.stringify({magnet})});assert.equal(created.status,201);
@@ -392,10 +436,27 @@ test("Worker immediate deletion is owner-only, private, confirmed by POST and id
  assert.equal((await fetchApi(endpoint,{method:"GET"})).status,405);
  assert.equal((await fetchApi(endpoint,{method:"POST",headers:{origin:"https://unapproved.example"}})).status,403);
  assert.equal((await fetchApi(`/api/downloads/${file.id}/cleanup`,{method:"POST"})).status,404);
+ const OriginalDate=Date;let clock=Date.parse(file.cleanupAllowedAt)-1;
+ global.Date=class extends OriginalDate{constructor(...args){super(...(args.length?args:[clock]));}static now(){return clock;}};
+ try{
+   assert.equal((await fetchApi(endpoint,{method:"POST",headers:{"x-session-id":other}})).status,403);
+   clock++;
+   assert.equal((await (await fetchApi(`/api/downloads/${file.id}`,{headers:{"x-session-id":other}})).json()).canDelete,true);
+   assert.equal((await fetchApi(endpoint,{method:"POST",headers:{"x-session-id":""}})).status,400);
+   const deleted=await fetchApi(endpoint,{method:"POST",headers:{"x-session-id":other}});assert.equal(deleted.status,200);assert.equal((await deleted.json()).status,"deleted");
+   assert.equal((await fetchApi(endpoint,{method:"POST"})).status,200);
+   assert.equal((await fetchApi(endpoint,{method:"POST",headers:{"x-session-id":other}})).status,200);
+ }finally{global.Date=OriginalDate;}
+});
+test("Worker creator can immediately delete a mistaken submission; forged owner fields grant no bypass",async()=>{
+ const other=crypto.randomUUID(),magnet=`magnet:?xt=urn:btih:${"d".repeat(40)}&dn=Mistaken%20link.zip&xl=1024`;
+ const created=await fetchApi("/api/downloads",{method:"POST",body:JSON.stringify({magnet})});assert.equal(created.status,201);
+ const file=await created.json();assert.equal(file.canDelete,true);
+ const endpoint=`/api/downloads/${file.id}/delete`;
+ const forged=await fetchApi(endpoint,{method:"POST",headers:{"x-session-id":other},body:JSON.stringify({canDelete:true,isOwner:true,ownerSessionHash:"a".repeat(64)})});
+ assert.equal(forged.status,403);assert.equal((await forged.json()).code,"file_protected");
  const deleted=await fetchApi(endpoint,{method:"POST"});assert.equal(deleted.status,200);assert.equal((await deleted.json()).status,"deleted");
  assert.equal((await fetchApi(endpoint,{method:"POST"})).status,200);
- assert.equal((await fetchApi(endpoint,{method:"POST",headers:{"x-session-id":other}})).status,403);
- assert.equal((await fetchApi(`/api/downloads/${fixtureId(3)}/delete`,{method:"POST"})).status,403);
 });
 test("owner capability requires a private random UUID rather than an easily guessed session",async()=>{
  const {requestOwnerHash}=require("./logic-test-build/apps/worker/src/utils/owner.js");

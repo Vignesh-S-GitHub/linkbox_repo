@@ -7,6 +7,8 @@ export interface PublicDownload {
   status: DownloadStatus;
   progress: number;
   createdAt: string;
+  /** Three-hour protection deadline, enforced by the Worker and database. */
+  cleanupAllowedAt?: string;
   expiresAt: string;
   deletedAt: string | null;
   errorMessage?: string;
@@ -14,7 +16,7 @@ export interface PublicDownload {
   /** Provider-confirmed type; absent while metadata is pending or on older APIs. */
   kind?: FileKind | null;
   fileCount?: number | null;
-  /** Request-specific permission; never an owner ID or session capability. */
+  /** Server-confirmed permission: creator anytime, other browsers after 3 hours. */
   canDelete?: boolean;
 }
 

@@ -7,8 +7,8 @@ const assets = (await readdir(new URL("assets/", dist))).filter(name => /^[A-Za-
 const icons = (await readdir(new URL("brand/04_ui_icons/svg/", dist))).filter(name => /^[a-z-]+\.svg$/.test(name)).sort();
 const precache = ["/index.html", "/site.webmanifest", ...assets.map(name => `/assets/${name}`),
   ...icons.map(name => `/brand/04_ui_icons/svg/${name}`),
-  "/brand/02_app_icons/linkbox-192x192.png", "/brand/02_app_icons/linkbox-512x512.png",
-  "/brand/02_app_icons/linkbox-180x180.png", "/brand/03_favicons/favicon.ico",
+  "/brand/02_app_icons/linkbox-app-v2-192.png", "/brand/02_app_icons/linkbox-app-v2-512.png",
+  "/brand/02_app_icons/linkbox-app-v2-180.png", "/brand/03_favicons/favicon.ico",
   "/brand/01_logo/png/linkbox-logo-full-transparent.png", "/brand/01_logo/png/linkbox-wordmark-transparent.png"];
 // Include template changes in the version so a policy-only update gets a separate cache.
 const template = await readFile(new URL("../apps/web/public/sw.js", import.meta.url), "utf8");

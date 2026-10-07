@@ -73,7 +73,7 @@ function App() {
     try{
       await api.deleteOwn(deleteTarget.id);
       setDownloads(items=>items.filter(file=>file.id!==deleteTarget.id));
-      setDeleteTarget(null);navigate("files");setNotice("Your download was deleted.");await refresh();
+      setDeleteTarget(null);navigate("files");setNotice("Download deleted.");await refresh();
     }catch(cause){setDeleteError((cause as ApiError).error??"Deletion could not finish. Please retry.");}
     finally{setDeleteBusy(false);}
   };

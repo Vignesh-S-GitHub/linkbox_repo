@@ -9,7 +9,9 @@
   "background_color": "#F6F9FE",
   "theme_color": "#0969F5",
   "icons": [
-    { "src": "/brand/02_app_icons/linkbox-192x192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "/brand/02_app_icons/linkbox-512x512.png", "sizes": "512x512", "type": "image/png" }
+    { "src": "/brand/02_app_icons/linkbox-app-v2-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/brand/02_app_icons/linkbox-app-v2-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/brand/02_app_icons/linkbox-app-v2-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/brand/02_app_icons/linkbox-app-v2-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }

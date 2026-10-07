@@ -14,6 +14,6 @@ export interface Database {
  update(row:DownloadRow,expectedCleanupClaim?:string|null):Promise<DownloadRow>;
  /** Internal policy removal only: CAS against the item observed by the progress poll. */
  claimForFailure(publicId:string,now:string,expectedItemId:string):Promise<DownloadRow|null>;
- /** With an owner digest: manual deletion at any age. Without one: expired items only. */
- claimForCleanup(publicId:string,now:string,ownerSessionHash?:string):Promise<DownloadRow|null>; listExpired(now:string):Promise<DownloadRow[]>;
+ /** Creator can delete anytime; others wait 3 hours. Cron only claims expired items. */
+ claimForCleanup(publicId:string,now:string,mode?:"manual"|"expired",ownerSessionHash?:string|null):Promise<DownloadRow|null>; listExpired(now:string):Promise<DownloadRow[]>;
 }

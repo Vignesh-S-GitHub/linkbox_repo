@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, ChevronLeft, ChevronRight, LoaderCircle, Search, Trash2, X } from "lucide-react";
+import { AlertCircle, ChevronLeft, ChevronRight, LoaderCircle, Search, X } from "lucide-react";
+import { DeleteAction } from "../components/DeleteAction";
 import type { FileContents, FileEntry, PublicDownload } from "@temporary-share/shared";
 import { Brand } from "../components/Brand";
 import { BrandIcon } from "../components/BrandIcon";
@@ -18,7 +19,7 @@ export function ProgressPage({ file, onClose, onDelete }: { file: PublicDownload
     <div className="folder-heading"><FileTile kind={downloadKind(file)}/><div><strong>{file.displayName}</strong><small>{file.sizeBytes ? formatBytes(file.sizeBytes) : "Size could not be determined"}</small></div></div>
     <h2 className="download-failed-heading"><AlertCircle size={23}/>Download failed</h2>
     <p className="inline-error" role="alert">{file.errorMessage ?? "Seedr could not complete this download. Check file availability and available storage."}</p>
-  </section><button className="primary full-width" onClick={onClose}>Back to files</button>{file.canDelete && <button className="unavailable-action full-width" onClick={onDelete}><Trash2 size={19}/>Delete</button>}</div>;
+  </section><button className="primary full-width" onClick={onClose}>Back to files</button><DeleteAction file={file} onDelete={onDelete} fullWidth/></div>;
   const steps = ["Added", "Fetching metadata", "Downloading", "Processing", "Ready"];
   const step = file.status === "ready" ? 4 : file.status === "processing" ? 3 : file.status === "downloading" ? 2 : 1;
   return <div className="progress-page"><section className="card"><div className="folder-heading"><FileTile kind={downloadKind(file)}/><div><strong>{file.displayName}</strong><small>{file.sizeBytes ? formatBytes(file.sizeBytes) : "Size pending metadata"}</small></div></div>
@@ -28,7 +29,7 @@ export function ProgressPage({ file, onClose, onDelete }: { file: PublicDownload
       {index === step && file.status !== "failed" && <div className="meter"><span style={{ width: `${file.progress}%` }}/></div>}
     </li>)}</ol>
     {file.errorMessage && <p className="inline-error" role="alert">{file.errorMessage}</p>}
-  </section><button className={file.status === "ready" ? "primary full-width" : "cancel full-width"} onClick={onClose}>{file.status === "ready" ? "Go to files" : "Back to files"}</button>{file.canDelete&&<button className="unavailable-action full-width" disabled={file.status==="deleting"} onClick={onDelete}><Trash2 size={19}/>Delete</button>}{["queued", "fetching_metadata", "downloading", "processing"].includes(file.status) && <p className="progress-hint">Progress comes from Seedr and refreshes automatically. New torrents or few available peers can take longer. You can leave and return; the download keeps running.</p>}</div>;
+  </section><button className={file.status === "ready" ? "primary full-width" : "cancel full-width"} onClick={onClose}>{file.status === "ready" ? "Go to files" : "Back to files"}</button><DeleteAction file={file} onDelete={onDelete} fullWidth/>{["queued", "fetching_metadata", "downloading", "processing"].includes(file.status) && <p className="progress-hint">Progress comes from Seedr and refreshes automatically. New torrents or few available peers can take longer. You can leave and return; the download keeps running.</p>}</div>;
 }
 export function FolderPage({ file, contents, onOpen, onMore, onDownload }: { file: PublicDownload; contents: FileContents; onOpen: (entry: FileEntry) => void; onMore: (entry: FileEntry) => void; onDownload: (entry: FileEntry) => void }) {
   const [search, setSearch] = useState("");
@@ -49,8 +50,8 @@ const guidePages = [
   ["Playback", "Press play", "Ready, supported media opens in the player. Playback support depends on the connected storage provider."],
   ["Downloads", "Keep what you need", "Download before the temporary storage period ends. LinkBox does not provide permanent backups."],
   ["Storage", "Your connected capacity", "The Storage page shows the connected capacity. One file must fit in a single account; capacity cannot be pooled for one download."],
-  ["Delete a download", "Added the wrong link?", "Use Delete from the same browser that added it, at any time. Confirm carefully: deletion is permanent and removes shared access."],
-  ["Free space", "Your files, your choice", "Delete your own downloads to make room, or wait for automatic expiration after 24 hours. Other users’ downloads cannot be deleted manually."],
+  ["Delete a download", "Protected from other users for 3 hours", "The browser that added a download can delete it anytime. Other users must wait 3 hours. Confirm carefully: deletion is permanent and removes shared access."],
+  ["Free space", "Shared storage", "Delete a download after its 3-hour protection ends when space is needed, or wait for automatic expiration after 24 hours."],
   ["Expiration", "Temporary by design", "Files expire after 24 hours. Scheduled removal runs hourly. Download anything you need in time."],
   ["Important", "Use responsibly", "Only add files you are authorized to access. This guide is a synthetic mock preview, not a file retrieved from Seedr."],
 ];

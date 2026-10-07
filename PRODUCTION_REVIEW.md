@@ -2,7 +2,7 @@
 
 ## Scope and release boundary
 
-Review of the approved V1 React frontend, Cloudflare Worker, D1 statements/migrations, Seedr adapter boundary, Cron lifecycle and build pipeline. The existing logo, light/dark themes and native-player controls are preserved. No new provider endpoint, paid infrastructure, account privilege, cleanup policy or database migration is introduced. Only app-managed files remain in scope for deletion; media stays on Seedr.
+Review of the approved V1 React frontend, Cloudflare Worker, D1 statements/migrations, Seedr adapter boundary, Cron lifecycle and build pipeline. The existing logo, light/dark themes and native-player controls are preserved. The follow-up deletion-policy change protects downloads from other users for 3h, then permits shared deletion; the creator can delete anytime from the submitting browser. Hourly 24h expiry remains unchanged. No new provider endpoint, paid infrastructure, Seedr account privilege or database migration is introduced. Only app-managed files remain in scope for deletion; media stays on Seedr.
 
 This review reduces identified risks; it cannot guarantee zero future failures. The changes are prepared separately from the live release and require merge/deployment approval. Tests use synthetic data, an isolated secret-free mock Worker and SQLite; no real Seedr magnet was submitted or deleted and production Cron was not invoked during this review.
 
@@ -23,7 +23,7 @@ This review reduces identified risks; it cannot guarantee zero future failures. 
 
 ## App installation
 
-Original 192px/512px app icons, stable manifest identity/scope, standalone display, Apple touch icon/metadata and a production-only versioned service worker. Settings offers native installation when supported, otherwise Android/iOS/Windows instructions. App updates require user action or closure of old windows; playback is not automatically interrupted.
+Padded 192px/512px app icons with regular/maskable manifest entries, stable manifest identity/scope, standalone display, a padded 180px Apple touch icon/metadata and a production-only versioned service worker. The website logo is unchanged. Settings offers native installation when supported, otherwise Android/iOS/Windows instructions. App updates require user action or closure of old windows; playback is not automatically interrupted.
 
 The service worker intercepts only same-origin public app navigations and narrowly allowed static assets. It bypasses API/admin requests, POST, credential/session headers, Range requests, signed asset queries and all third-party media. It checks response MIME types, bounds runtime caching and cleans only its own versioned caches. No background media download, offline data queue or personal/account cache exists.
 
@@ -31,9 +31,9 @@ The canonical offline HTML is installed together with its versioned bundles and 
 
 ## Verification
 
-- Lint and TypeScript checking of frontend, Worker and shared types; 129 automated tests passed (45 business, 38 D1, 15 live-adapter fixture, 14 connection helper, 3 admin helper and 14 web/PWA).
+- Final local recheck on 7 October 2026: lint and TypeScript checking of frontend, Worker and shared types; 137 automated tests passed (48 business, 41 D1, 15 live-adapter fixture, 14 connection helper, 3 admin helper and 16 web/PWA).
 - Business/security tests and real SQLite execution of the D1 migration/statements, including races, ownership, fair polling, provider failures, contiguous account fit, metadata timeouts and exact expiry.
-- Web safety/PWA tests for request timeout/cancellation, no POST replay, stale-refresh rejection, blocked storage, cache exclusions, offline shell, MIME rejection, scoped cache cleanup, explicit update activation, one-shot install prompt and actual icon dimensions.
+- Web safety/PWA tests for request timeout/cancellation, no POST replay, stale-refresh rejection, blocked storage, cache exclusions, offline shell, MIME rejection, scoped cache cleanup, explicit update activation, one-shot install prompt, actual icon dimensions and decoded artwork pixels wholly inside the 40%-radius mask-safe circle. Corrected assets were visually inspected; this is not an OS installation test.
 - Frontend production build and Worker deployment dry-run, without production writes.
 - Full dependency audit and lockfile dry-run validation.
 - Isolated workerd runtime checks for mock quota, validation, submission/list, duplicate rejection, owner/stranger delete, idempotent delete, expired delivery, folder contents/playback link, admin/origin rejection and local scheduled handler.
@@ -50,7 +50,7 @@ Automated tests and mock runtime checks do **not** prove the user's device audio
 4. Deleted metadata/tombstones are currently retained. Growth is modest under light usage, but operators should monitor D1 storage and define a retention/backup policy before larger usage. This review does not silently purge history. D1 backups cannot restore deleted Seedr files.
 5. Worker/D1/provider free tiers are finite and can change. No unlimited-use or permanent ₹0 guarantee is possible. No paid services are added by this release.
 6. Native media/browser installation and clipboard behaviour vary by device. No transcoding or original-resolution guarantee is added. External players may use the original direct delivery link when its codec/protocol is supported.
-7. Browser storage eviction or a separate installed-app profile can lose owner-delete permission; there is no mandatory login or owner recovery in V1. Service-worker caching is not a file backup.
+7. Downloads are protected from other users for 3 hours; the creator can delete anytime using the original private browser session. After 3 hours any visitor can permanently delete them. Browser storage eviction loses creator access but does not change the shared deletion deadline. Legacy unowned records must wait 3 hours. Service-worker caching is not a file backup.
 8. Private PAT/admin-key rotation must happen through Worker secrets. Avoid non-expiring full-account tokens when a narrower, expiring token is sufficient. Keep tokens, session IDs and signed media URLs out of logs/source/screenshots.
 9. The lazy full HLS chunk retains separate-audio support and exceeds Vite's 500 kB warning threshold. It is a build warning, not a failed build. The install shell precaches this static code once (not media); quota-limited devices may evict caches.
 
