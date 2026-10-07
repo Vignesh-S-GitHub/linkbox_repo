@@ -6,6 +6,7 @@ import { formatBytes, relativeTime, age } from "../lib/format";
 import { useState } from "react";
 import { canCopyDownloadLink } from "../lib/download-link";
 import { downloadKind } from "../../../../packages/shared/src/file-kind";
+import { ExternalPlayerAction } from "./ExternalPlayerAction";
 
 export function ActionsSheet({ file, entry, onClose, onOpen, onDownload, onShare, onCopy, onDelete }: { file: PublicDownload; entry?: FileEntry; onClose: () => void; onOpen: () => void; onDownload: () => void; onShare: () => void; onCopy: () => Promise<void>; onDelete:()=>void }) {
   const [details, setDetails] = useState(false);
@@ -22,6 +23,7 @@ export function ActionsSheet({ file, entry, onClose, onOpen, onDownload, onShare
   return <Sheet title={`Actions for ${entry?.displayName ?? file.displayName}`} onClose={onClose}>
     <h2 className="sheet-file-name">{entry?.displayName ?? file.displayName}</h2><div className="action-menu">
       <button disabled={!ready} onClick={onOpen}><BrandIcon name="play"/>Play / Preview</button>
+      <ExternalPlayerAction file={file} entry={entry} onCopy={onCopy}/>
       <button disabled={!ready} onClick={onDownload}><BrandIcon name="download"/>Download</button>
       {(entry?.kind ?? downloadKind(file)) !== "folder" && <button disabled={copying || !canCopyDownloadLink(file, entry)} onClick={() => void copy()}><BrandIcon name="link"/>{copying ? "Getting link…" : "Copy download link"}</button>}<button onClick={onShare}><BrandIcon name="share"/>Share</button>
       <button onClick={() => setDetails(!details)} aria-expanded={details}><BrandIcon name="info"/>File details</button>

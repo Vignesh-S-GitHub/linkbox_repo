@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { inflateSync } from "node:zlib";
+import { createRequire } from "node:module";
 const root = new URL("../", import.meta.url);
 const tests = [], test = (name, run) => tests.push([name, run]);
 async function moduleAt(path) {
@@ -12,6 +13,78 @@ async function moduleAt(path) {
 }
 const { requestJson } = await moduleAt("apps/web/src/lib/http.ts");
 const { RefreshCoordinator } = await moduleAt("apps/web/src/lib/refresh-coordinator.ts");
+const { supportsPlayerIntent, isExternalMedia, externalPlayerIntent } = await moduleAt("apps/web/src/lib/external-player.ts");
+
+test("external launch is limited to Android Chrome; other devices retain clipboard fallback", () => {
+  assert.equal(supportsPlayerIntent("Mozilla/5.0 (Linux; Android 14) Chrome/130.0 Mobile Safari/537.36"), true);
+  for (const ua of ["Windows Chrome/130.0", "iPhone CriOS/130.0", "Android Firefox/130.0", "Android; wv) Chrome/130.0", ""])
+    assert.equal(supportsPlayerIntent(ua), false);
+  assert.equal(isExternalMedia("video"), true); assert.equal(isExternalMedia("audio"), true);
+  for (const kind of ["folder", "pdf", "image", "other", "video;package=evil"]) assert.equal(isExternalMedia(kind), false);
+});
+
+test("external player intent preserves the exact signed original URL and allows a compatible player chooser", () => {
+  const url = "https://cdn.seedr.cc/direct/Demo%20Video.mp4?signature=a%2Bb%2Fc%3D&name=demo%23one&size=1080", fallback = "https://linkbox-repo.pages.dev/files?example=1#public";
+  for (const kind of ["video", "audio"]) {
+    const intent = externalPlayerIntent(url, kind, fallback), [data, fragment] = intent.split("#Intent;");
+    assert.equal(data.replace(/^intent:/, "https:"), url);
+    assert.ok(fragment.includes(`type=${kind}%2F%2A;`));
+    assert.ok(fragment.includes("scheme=https;action=android.intent.action.VIEW;"));
+    assert.ok(fragment.includes(`S.browser_fallback_url=${encodeURIComponent(fallback)};`));
+    assert.ok(!fragment.includes("package=") && !fragment.includes("component=") && !fragment.includes("Authorization"));
+    assert.ok(intent.endsWith(";end"));
+  }
+});
+
+test("external player rejects credentials, API URLs and intent injection without disclosing delivery details", () => {
+  const fallback = "https://linkbox-repo.pages.dev/files";
+  for (const url of ["javascript:alert(1)", "http://cdn.seedr.cc/file.mp4", "https://seedr.cc.evil.test/file.mp4", "https://evil.test/file.mp4", "https://user:private-token@seedr.cc/file.mp4", "https://seedr.cc:444/file.mp4", "https://seedr.cc/api/v0.1/files", "https://seedr.cc/file.mp4#Intent;package=evil;end", "https://seedr.cc/file.mp4#", "https://seedr.cc/file.mp4\n", "https://seedr.cc/" + "x".repeat(8192), undefined]) {
+    assert.throws(() => externalPlayerIntent(url, "video", fallback), error => error.message === "External player link unavailable");
+  }
+  for (const page of ["javascript:alert(1)", "https://user:private@linkbox.example/", "not a URL"])
+    assert.throws(() => externalPlayerIntent("https://seedr.cc/file.mp4", "video", page));
+  assert.throws(() => externalPlayerIntent("https://seedr.cc/file.mp4", "folder", fallback));
+  assert.ok(externalPlayerIntent("https://seedr.cc/file.mp4", "video", "http://localhost:5173/files").includes("http%3A%2F%2Flocalhost"));
+});
+
+test("external action appears only for media, respects lifecycle and never changes existing player controls", async () => {
+  const componentUrl = new URL("apps/web/src/components/ExternalPlayerAction.tsx", root), webRequire = createRequire(componentUrl);
+  const react = webRequire("react"), { renderToStaticMarkup } = webRequire("react-dom/server");
+  async function render(file, entry, userAgent = "Windows Chrome/130.0") {
+    const cache = new Map();
+    async function load(url) {
+      const source = await readFile(url, "utf8"), dependencies = new Map();
+      for (const match of source.matchAll(/from\s+["'](\.[^"']+)["']/g)) {
+        const specifier = match[1];
+        if (specifier === "../lib/api") dependencies.set(specifier, { api: { delivery: () => assert.fail("SSR must not fetch a signed link") } });
+        else {
+          const dependency = new URL(specifier + (specifier === "./BrandIcon" ? ".tsx" : ".ts"), url);
+          if (!cache.has(dependency.href)) cache.set(dependency.href, await load(dependency));
+          dependencies.set(specifier, cache.get(dependency.href));
+        }
+      }
+      const output = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 } }).outputText;
+      const module = { exports: {} };
+      runInNewContext(output, { module, exports: module.exports, Date, URL, AbortController, navigator: { userAgent }, require: name => dependencies.has(name) ? dependencies.get(name) : webRequire(name) });
+      return module.exports;
+    }
+    const { ExternalPlayerAction } = await load(componentUrl);
+    return renderToStaticMarkup(react.createElement(ExternalPlayerAction, { file, entry, onCopy: async () => {} }));
+  }
+  const file = { id: "public-fixture", displayName: "Demo.mp4", kind: "video", status: "ready", expiresAt: new Date(Date.now() + 60000).toISOString(), deletedAt: null };
+  assert.match(await render(file), /Open in external player/);
+  assert.match(await render({ ...file, kind: "audio" }), /Open in external player/);
+  for (const kind of ["folder", "pdf", "image", "other"]) assert.equal(await render({ ...file, kind }), "");
+  assert.match(await render({ ...file, kind: "folder" }, { id: "entry", kind: "video" }), /Open in external player/);
+  for (const changes of [{ status: "downloading" }, { deletedAt: new Date().toISOString() }, { expiresAt: new Date(Date.now() - 1).toISOString() }])
+    assert.match(await render({ ...file, ...changes }), /disabled/);
+  assert.match(await render(file, undefined, "Android Chrome/130.0"), /Preparing external player/);
+  const source = await readFile(componentUrl, "utf8"), sheet = await readFile(new URL("apps/web/src/components/ActionsSheet.tsx", root), "utf8");
+  assert.ok(source.includes('api.delivery(file.id, "download", entry?.id, controller.signal)'));
+  assert.ok(source.includes("window.location.assign(intent)")); assert.ok(source.includes("controller.abort()"));
+  assert.match(sheet, /Play \/ Preview/); assert.match(sheet, /Copy download link/); assert.match(sheet, /<DeleteAction/);
+  assert.ok(!source.includes("localStorage") && !source.includes("api.play") && !source.includes("setInterval"));
+});
 test("API timeout is bounded, does not retry POST and warns about uncertain acceptance", async () => {
   const original = globalThis.fetch; let calls = 0;
   try {
