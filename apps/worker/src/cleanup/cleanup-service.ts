@@ -1,8 +1,8 @@
 import type { Database } from "../database/database";
 import type { SeedrAdapter } from "../seedr/adapter";
 import type { DownloadRow } from "../types";
-import { ownsDownload } from "../utils/owner";
 import { ApiProblem } from "../utils/magnet";
+import { ownsDownload } from "../utils/owner";
 export async function completeDeletion(database:Database,adapter:SeedrAdapter,row:DownloadRow,now:string,status:"deleted"|"expired",previousStatus:DownloadRow["status"]="ready"):Promise<DownloadRow>{
   try { await adapter.deleteItem(row.seedrAccountId,row.seedrItemId); }
   catch(error) {
@@ -12,11 +12,12 @@ export async function completeDeletion(database:Database,adapter:SeedrAdapter,ro
   }
   return database.update({...row,status,deletedAt:now,cleanupClaimedAt:now,errorMessage:null});
 }
-export async function deleteOwnedItem(database:Database,adapter:SeedrAdapter,publicId:string,now:string,ownerSessionHash:string|null){
+export async function deleteSharedItem(database:Database,adapter:SeedrAdapter,publicId:string,now:string,ownerSessionHash:string|null=null){
  const previous=await database.findByPublicId(publicId);
- if(!previous||!ownsDownload(previous,ownerSessionHash))throw new ApiProblem(403,"not_download_owner","Only the browser that added this download can delete it immediately.");
+ if(!previous)throw new ApiProblem(404,"not_found","This download does not exist.");
  if(previous.deletedAt)return previous;
- const claimed=await database.claimForCleanup(publicId,now,ownerSessionHash!);
+ if(!ownsDownload(previous,ownerSessionHash)&&Date.parse(now)<Date.parse(previous.cleanupAllowedAt))throw new ApiProblem(403,"file_protected","Only the browser that added this download can delete it during the first 3 hours. Please wait until protection ends.");
+ const claimed=await database.claimForCleanup(publicId,now,"manual",ownerSessionHash);
  if(!claimed)return null;
  return completeDeletion(database,adapter,claimed,now,"deleted",previous.status==="deleting"?"failed":previous.status);
 }

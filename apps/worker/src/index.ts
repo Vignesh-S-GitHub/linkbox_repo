@@ -2,7 +2,7 @@ import type { ApiError, StorageSummary } from "@temporary-share/shared";
 import { accountsFromEnv, maxActiveDownloads, maxFileBytes } from "./config";
 import { databaseFor } from "./database/factory";
 import type { Database } from "./database/database";
-import { deleteOwnedItem, expireDueItems } from "./cleanup/cleanup-service";
+import { deleteSharedItem, expireDueItems } from "./cleanup/cleanup-service";
 import { LiveSeedrAdapter } from "./seedr/live-adapter";
 import { MockSeedrAdapter } from "./seedr/mock-adapter";
 import type { SeedrAdapter } from "./seedr/adapter";
@@ -145,7 +145,7 @@ async function createDownload(request: Request, env: Env) {
       });
     }
     const created = new Date(), publicId = crypto.randomUUID();
-    // Retained solely for the existing D1 schema constraint; no 3-hour policy uses this value.
+    // Protection starts at submission, independently of download progress.
     let row: DownloadRow = { id: crypto.randomUUID(), publicId, seedrAccountId: account.id, seedrItemId: `linkbox:${publicId}:0:0`, magnetHash: hash,
       displayName: "New shared download", sizeBytes: requested ?? 0, status: "queued", progress: 0, createdAt: created.toISOString(),
       cleanupAllowedAt: new Date(+created + 10800000).toISOString(), expiresAt: new Date(+created + 86400000).toISOString(),
@@ -166,7 +166,7 @@ async function createDownload(request: Request, env: Env) {
         ? "Seedr rejected the account token permissions for this action. Ask the administrator to check the token's file and download permissions, then delete this item before retrying."
         : rejected ? rejectionMessage : "Submission confirmation is delayed. Progress will retry automatically." });
     }
-    return publicDownload(row,true);
+    return publicDownload(row,ownerSessionHash);
   } finally { await database.releaseLease("submission", lock); }
 }
 function storageOnly(env: Env) { return env.SEEDR_MODE === "live" && env.SEEDR_ACCESS === "storage-only"; }
@@ -212,8 +212,8 @@ async function appFetch(request: Request, env: Env): Promise<Response> {
     const database = databaseFor(env);
     env=await configuredEnvironment(env,database);
     const adapter = adapterFor(env);
-    const ownerHash=await requestOwnerHash(request);
-    const safeDownload=(row:DownloadRow)=>publicDownload(row,ownsDownload(row,ownerHash));
+    const ownerSessionHash=await requestOwnerHash(request);
+    const safeDownload=(row:DownloadRow)=>publicDownload(row,ownerSessionHash);
     if (path === "/api/storage" && request.method === "GET") return json(await storageSnapshot(database, adapter, env), 200, headers);
     if (path === "/api/downloads" && request.method === "GET") return json((await refreshRows(database, adapter, env)).map(safeDownload), 200, headers);
     if (path === "/api/downloads" && request.method === "POST") return json(await createDownload(request, env), 201, headers);
@@ -224,14 +224,14 @@ async function appFetch(request: Request, env: Env): Promise<Response> {
     if (!action && request.method === "GET") return json(safeDownload(row), 200, headers);
     if(action==="delete"&&request.method!=="POST")throw new ApiProblem(405,"method_not_allowed","Method not allowed.");
     if(action==="delete"&&request.method==="POST"){
-      if(!ownsDownload(row,ownerHash))throw new ApiProblem(403,"not_download_owner","Only the browser that added this download can delete it immediately.");
       if(row.deletedAt)return json(safeDownload(row),200,headers);
+      if(!ownsDownload(row,ownerSessionHash)&&Date.now()<Date.parse(row.cleanupAllowedAt))throw new ApiProblem(403,"file_protected","Only the browser that added this download can delete it during the first 3 hours. Please wait until protection ends.");
       // Prevent deletion racing the admission/checkpoint sequence of a submission.
       const lock=await database.acquireLease("submission",Date.now(),120000);
       if(!lock)throw new ApiProblem(409,"submission_busy","A download is still being submitted. Please retry deletion shortly.");
       try{
         await rateLimit(database,request,env,`delete:${publicId}`);
-        const updated=await deleteOwnedItem(database,adapter,publicId,new Date().toISOString(),ownerHash);
+        const updated=await deleteSharedItem(database,adapter,publicId,new Date().toISOString(),ownerSessionHash);
         if(!updated)throw new ApiProblem(409,"deletion_in_progress","This download is already being deleted. Please retry shortly.");
         try{await database.syncAccounts(await adapter.syncAccounts());}catch{console.warn("Storage refresh will retry after deletion");}
         return json(safeDownload(updated),200,headers);

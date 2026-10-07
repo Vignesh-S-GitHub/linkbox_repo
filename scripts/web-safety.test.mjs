@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
+import { inflateSync } from "node:zlib";
 const root = new URL("../", import.meta.url);
 const tests = [], test = (name, run) => tests.push([name, run]);
 async function moduleAt(path) {
@@ -107,10 +108,63 @@ test("blocked browser storage does not crash identity or appearance preferences"
     const storage = await moduleAt("apps/web/src/lib/browser-storage.ts"); assert.equal(storage.readBrowserValue("session"), null); assert.equal(storage.writeBrowserValue("session", "fixture"), false); assert.equal(storage.readAppearance(), "light");
   } finally { if (original) Object.defineProperty(globalThis, "localStorage", original); else delete globalThis.localStorage; }
 });
-test("manifest has stable identity, standalone scope and original valid PNG icons", async () => {
+test("manifest has stable identity, standalone scope and valid regular/maskable PNG icons", async () => {
   const manifest = JSON.parse(await readFile(new URL("apps/web/public/site.webmanifest", root), "utf8"));
   assert.equal(manifest.id, "/"); assert.equal(manifest.scope, "/"); assert.equal(manifest.display, "standalone");
-  for (const size of [192, 512]) { const icon = manifest.icons.find(icon => icon.sizes === `${size}x${size}`); assert.ok(icon); const png = await readFile(new URL("apps/web/public" + icon.src, root)); assert.equal(png.readUInt32BE(16), size); assert.equal(png.readUInt32BE(20), size); }
+  for (const size of [192, 512]) for (const purpose of ["any", "maskable"]) {
+    const icon = manifest.icons.find(icon => icon.sizes === `${size}x${size}` && icon.purpose === purpose);
+    assert.ok(icon); assert.equal(icon.type, "image/png");
+    const png = await readFile(new URL("apps/web/public" + icon.src, root)); assert.equal(png.readUInt32BE(16), size); assert.equal(png.readUInt32BE(20), size);
+  }
+});
+
+// Read our bounded, opaque RGB exports with built-in zlib; no imaging dependency
+// is added to CI. Reconstruct all five PNG row filters before checking pixels.
+function iconPixels(png) {
+  assert.deepEqual(png.subarray(0, 8), Buffer.from([137,80,78,71,13,10,26,10]));
+  const width=png.readUInt32BE(16), height=png.readUInt32BE(20);
+  assert.equal(png[24],8); assert.equal(png[25],2,"App icons must be opaque RGB"); assert.equal(png[28],0);
+  const chunks=[];
+  for(let offset=8;offset<png.length;){
+    const length=png.readUInt32BE(offset),type=png.toString("ascii",offset+4,offset+8);
+    if(type==="IDAT")chunks.push(png.subarray(offset+8,offset+8+length));
+    offset+=12+length;
+  }
+  const stride=width*3, raw=inflateSync(Buffer.concat(chunks),{maxOutputLength:(stride+1)*height});
+  assert.equal(raw.length,(stride+1)*height); const pixels=Buffer.alloc(stride*height);
+  function paeth(a,b,c){const p=a+b-c,da=Math.abs(p-a),db=Math.abs(p-b),dc=Math.abs(p-c);return da<=db&&da<=dc?a:db<=dc?b:c;}
+  for(let y=0;y<height;y++){
+    const filter=raw[y*(stride+1)]; assert.ok(filter<=4);
+    for(let x=0;x<stride;x++){
+      const index=y*stride+x,left=x>=3?pixels[index-3]:0,up=y?pixels[index-stride]:0,diagonal=y&&x>=3?pixels[index-stride-3]:0;
+      const predictor=[0,left,up,Math.floor((left+up)/2),paeth(left,up,diagonal)][filter];
+      pixels[index]=(raw[y*(stride+1)+1+x]+predictor)&255;
+    }
+  }
+  return {width,height,pixels};
+}
+test("installed icon artwork stays wholly inside the circular mask-safe area at all export sizes",async()=>{
+  for(const size of [180,192,512]){
+    const {width,height,pixels}=iconPixels(await readFile(new URL(`apps/web/public/brand/02_app_icons/linkbox-app-v2-${size}.png`,root)));
+    assert.equal(width,size);assert.equal(height,size);
+    let colored=0,minX=size,maxX=0,minY=size,maxY=0;
+    for(let y=0;y<size;y++)for(let x=0;x<size;x++){
+      const i=(y*size+x)*3;
+      if(pixels[i]<220&&pixels[i+2]-pixels[i]>25){
+        colored++;minX=Math.min(minX,x);maxX=Math.max(maxX,x);minY=Math.min(minY,y);maxY=Math.max(maxY,y);
+        assert.ok(Math.hypot((x+.5)/size-.5,(y+.5)/size-.5)<.4,`Artwork outside launcher-safe circle: ${size}px at ${x},${y}`);
+      }
+    }
+    assert.ok(colored>size*size*.25,"The logo must remain recognizable, not a tiny mark");
+    assert.ok(minX>size*.1&&minY>size*.1&&maxX<size*.9&&maxY<size*.9,"No artwork may touch a canvas edge");
+    assert.ok(Math.abs((minX+maxX+1)/2/size-.5)<.025&&Math.abs((minY+maxY+1)/2/size-.5)<.025,"Center the complete symbol");
+  }
+});
+test("Apple touch icon and offline shell use the corrected versioned app icons",async()=>{
+  const html=await readFile(new URL("apps/web/index.html",root),"utf8"),builder=await readFile(new URL("scripts/build-pwa.mjs",root),"utf8");
+  assert.match(html,/rel="apple-touch-icon" href="\/brand\/02_app_icons\/linkbox-app-v2-180\.png"/);
+  for(const size of [180,192,512])assert.ok(builder.includes(`linkbox-app-v2-${size}.png`));
+  assert.ok(builder.includes("digest.update(await readFile"),"Icon contents must invalidate the previous offline shell cache");
 });
 test("install prompt is one-shot and app updates never reload without consent", async () => {
   const originalWindow = globalThis.window, originalDocument = globalThis.document, originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");

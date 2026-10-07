@@ -1,4 +1,4 @@
-import { Trash2 } from "lucide-react";
+import { DeleteAction } from "./DeleteAction";
 import type { FileEntry, PublicDownload } from "@temporary-share/shared";
 import { Sheet } from "./Sheet";
 import { BrandIcon } from "./BrandIcon";
@@ -27,7 +27,7 @@ export function ActionsSheet({ file, entry, onClose, onOpen, onDownload, onShare
       <button onClick={() => setDetails(!details)} aria-expanded={details}><BrandIcon name="info"/>File details</button>
     </div>{details && <dl className="file-details"><div><dt>Size</dt><dd>{formatBytes(entry?.sizeBytes ?? file.sizeBytes)}</dd></div><div><dt>Added</dt><dd>{age(file.createdAt)}</dd></div><div><dt>Expires in</dt><dd>{relativeTime(file.expiresAt)}</dd></div></dl>}
     {copyError && <p className="inline-error" role="alert">{copyError}</p>}
-    {!entry&&file.canDelete&&<button className="unavailable-action" disabled={file.status==="deleting"} onClick={onDelete}><Trash2 size={19}/>Delete</button>}
-    <p className="sheet-note">Files expire after 24 hours. You can delete your own download anytime.</p>
+    {!entry&&<DeleteAction file={file} onDelete={onDelete}/>}
+    <p className="sheet-note">You can delete downloads added in this browser anytime. Other users must wait 3 hours. Files expire automatically after 24 hours.</p>
   </Sheet>;
 }

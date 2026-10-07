@@ -5,7 +5,7 @@ const { DatabaseSync } = require("node:sqlite");
 const { D1MetadataDatabase } = require("./logic-test-build/apps/worker/src/database/d1-database.js");
 const { databaseFor } = require("./logic-test-build/apps/worker/src/database/factory.js");
 const worker = require("./logic-test-build/apps/worker/src/index.js").default;
-const { deleteOwnedItem, expireDueItems } = require("./logic-test-build/apps/worker/src/cleanup/cleanup-service.js");
+const { deleteSharedItem, expireDueItems } = require("./logic-test-build/apps/worker/src/cleanup/cleanup-service.js");
 
 // Real SQLite executes the SAME migration/statements behind a small D1 binding
 // facade. No remote account, secrets, media or helper subprocesses are involved.
@@ -131,10 +131,11 @@ test("policy removal claim is atomic against duplicate polls, owner deletion, Cr
  try{const timestamp=new Date().toISOString();assert.equal(await state.db.claimForFailure(state.publicId,timestamp,"stale-item-id"),null);
  const outcomes=await Promise.all([state.db.claimForFailure(state.publicId,timestamp,state.row.seedrItemId),second.claimForFailure(state.publicId,timestamp,state.row.seedrItemId)]);
  assert.equal(outcomes.filter(Boolean).length,1);const claimed=outcomes.find(Boolean);
- assert.equal(await second.claimForCleanup(state.publicId,timestamp,state.row.ownerSessionHash),null);
+ assert.equal(await second.claimForCleanup(state.publicId,timestamp,"manual"),null);
  assert.equal((await state.db.update({...state.row,status:"downloading"})).status,"deleting");
  await state.db.update({...claimed,status:"failed",cleanupClaimedAt:null,errorMessage:"Size limit exceeded"},claimed.cleanupClaimedAt);
- assert.ok(await second.claimForCleanup(state.publicId,timestamp,state.row.ownerSessionHash));
+ assert.equal(await second.claimForCleanup(state.publicId,timestamp,"manual"),null);
+ assert.ok(await second.claimForCleanup(state.publicId,state.row.cleanupAllowedAt,"manual"));
  }finally{state.sqlite.close();}
 });
 
@@ -150,31 +151,31 @@ test("JSON-rejected submission is terminal immediately rather than uncertain met
  }finally{globalThis.fetch=original;sqlite.close();}
 });
 
-test("owner-only D1 deletion is immediate and atomic, not for strangers or legacy items",async()=>{
- const {sqlite,db}=setup();try{await db.syncAccounts([account]);const owner="a".repeat(64),other="b".repeat(64);
- const row=await db.create(fixture(1,{ownerSessionHash:owner,status:"downloading"}));
- assert.equal(await db.claimForCleanup(row.publicId,now),null);assert.equal(await db.claimForCleanup(row.publicId,now,other),null);
+test("D1 shared deletion enforces the exact three-hour boundary and is atomic for legacy items too",async()=>{
+ const {sqlite,db,binding}=setup();try{await db.syncAccounts([account]);const owner="a".repeat(64);
+ const row=await db.create(fixture(2,{ownerSessionHash:owner,status:"downloading"}));
+ assert.equal(await db.claimForCleanup(row.publicId,now),null);assert.equal(await db.claimForCleanup(row.publicId,now,"manual"),null);
  let calls=0;const adapter={async deleteItem(){calls++;}};
- await assert.rejects(deleteOwnedItem(db,adapter,row.publicId,now,other),e=>e.code==="not_download_owner");assert.equal(calls,0);
- const outcomes=await Promise.all([deleteOwnedItem(db,adapter,row.publicId,now,owner),deleteOwnedItem(db,adapter,row.publicId,now,owner)]);
+ await assert.rejects(deleteSharedItem(db,adapter,row.publicId,now),e=>e.code==="file_protected");assert.equal(calls,0);
+ const before=new Date(Date.parse(row.cleanupAllowedAt)-1).toISOString();
+ assert.equal(await db.claimForCleanup(row.publicId,before,"manual"),null);
+ const outcomes=await Promise.all([deleteSharedItem(db,adapter,row.publicId,row.cleanupAllowedAt),deleteSharedItem(new D1MetadataDatabase(binding),adapter,row.publicId,row.cleanupAllowedAt)]);
  assert.equal(calls,1);assert.ok(outcomes.filter(Boolean).length>=1);assert.ok(outcomes.filter(Boolean).every(row=>row.status==="deleted"));assert.equal((await db.findByPublicId(row.publicId)).status,"deleted");
- assert.equal((await deleteOwnedItem(db,adapter,row.publicId,now,owner)).status,"deleted");assert.equal(calls,1);
- await assert.rejects(deleteOwnedItem(db,adapter,row.publicId,now,other),e=>e.code==="not_download_owner");
- const old=await db.create(fixture(1));assert.equal(await db.claimForCleanup(old.publicId,now,owner),null);
- await assert.rejects(deleteOwnedItem(db,adapter,old.publicId,now,owner),e=>e.code==="not_download_owner");
+ assert.equal((await deleteSharedItem(db,adapter,row.publicId,row.cleanupAllowedAt)).status,"deleted");assert.equal(calls,1);
+ const old=await db.create(fixture(4));assert.equal((await deleteSharedItem(db,adapter,old.publicId,now)).status,"deleted");
  }finally{sqlite.close();}
 });
 test("D1 owner digest is immutable and deletion failure keeps a retryable original status",async()=>{
  const {sqlite,db}=setup();try{await db.syncAccounts([account]);const owner="a".repeat(64);
- const row=await db.create(fixture(1,{ownerSessionHash:owner,status:"downloading"}));
+ const row=await db.create(fixture(4,{ownerSessionHash:owner,status:"downloading"}));
  assert.equal((await db.update({...row,ownerSessionHash:"b".repeat(64)})).ownerSessionHash,owner);
- await assert.rejects(deleteOwnedItem(db,{async deleteItem(){throw Error("outage");}},row.publicId,now,owner));
+ await assert.rejects(deleteSharedItem(db,{async deleteItem(){throw Error("outage");}},row.publicId,now));
  const retry=await db.findByPublicId(row.publicId);assert.equal(retry.deletedAt,null);assert.equal(retry.cleanupClaimedAt,null);assert.equal(retry.status,"downloading");
- assert.equal((await deleteOwnedItem(db,{async deleteItem(){}},row.publicId,now,owner)).status,"deleted");
+ assert.equal((await deleteSharedItem(db,{async deleteItem(){}},row.publicId,now)).status,"deleted");
  await assert.rejects(db.create(fixture(1,{ownerSessionHash:"invalid"})),e=>e.code==="database_unavailable");
  }finally{sqlite.close();}
 });
-test("Worker owner deletion waits for submission checkpoint lock without contacting Seedr",async()=>{
+test("Worker shared deletion waits for submission checkpoint lock without contacting Seedr",async()=>{
  const {sqlite,db,binding}=setup(),original=globalThis.fetch;
  try{await db.syncAccounts([account]);const session="12345678-1234-4234-8234-123456789012";
  const {requestOwnerHash}=require("./logic-test-build/apps/worker/src/utils/owner.js");const hash=await requestOwnerHash(new Request("http://localhost",{headers:{"x-session-id":session}}));
@@ -314,17 +315,17 @@ test("D1 stale progress cannot undo a cleanup claim or resurrect deletion", asyn
     await db.create(fixture(4, { magnetHash: stale.magnetHash })); // duplicate allowed after deletion
   } finally { sqlite.close(); }
 });
-test("D1 stale progress cannot revive terminal failure; owner cleanup still works", async () => {
+test("D1 stale progress cannot revive terminal failure; eligible shared cleanup still works", async () => {
   const { sqlite, db } = setup();
   try {
     await db.syncAccounts([account]);
-    const stale = await db.create(fixture(1, {status:"fetching_metadata",sizeBytes:0,progress:0,ownerSessionHash:"a".repeat(64)}));
+    const stale = await db.create(fixture(4, {status:"fetching_metadata",sizeBytes:0,progress:0,ownerSessionHash:"a".repeat(64)}));
     await db.update({...stale,status:"failed",errorMessage:"Metadata unavailable"});
     for (const status of ["queued","fetching_metadata","downloading","processing","ready"]) {
       const current=await db.update({...stale,status,progress:20});
       assert.equal(current.status,"failed");assert.equal(current.errorMessage,"Metadata unavailable");
     }
-    const deleted=await deleteOwnedItem(db,{async deleteItem(){}},stale.publicId,now,stale.ownerSessionHash);
+    const deleted=await deleteSharedItem(db,{async deleteItem(){}},stale.publicId,now);
     assert.equal(deleted.status,"deleted");
   } finally { sqlite.close(); }
 });
@@ -333,10 +334,10 @@ test("D1 remote cleanup failure releases only its own claim for retry", async ()
   const { sqlite, db } = setup();
   try {
     await db.syncAccounts([account]); const row = await db.create(fixture(4, {ownerSessionHash:"a".repeat(64)}));
-    await assert.rejects(deleteOwnedItem(db, { async deleteItem() { throw new Error("outage"); } }, row.publicId, now, row.ownerSessionHash));
+    await assert.rejects(deleteSharedItem(db, { async deleteItem() { throw new Error("outage"); } }, row.publicId, now));
     const restored = await db.findByPublicId(row.publicId);
     assert.equal(restored.status, "ready"); assert.equal(restored.cleanupClaimedAt, null);
-    assert.equal((await deleteOwnedItem(db, { async deleteItem() {} }, row.publicId, now, row.ownerSessionHash)).status, "deleted");
+    assert.equal((await deleteSharedItem(db, { async deleteItem() {} }, row.publicId, now)).status, "deleted");
   } finally { sqlite.close(); }
 });
 test("D1 repeated expiration is idempotent and preserves all unexpired files", async () => {
@@ -534,6 +535,63 @@ test("confirmed task token rejection fails immediately without replaying or dele
   }finally{globalThis.fetch=original;sqlite.close();}
  }
 });
+test("Worker protects all statuses from strangers and recognizes creators without exposing their private identity",async()=>{
+ const {sqlite,db,binding}=setup(),original=globalThis.fetch;
+ try{
+  await db.syncAccounts([account]);globalThis.fetch=()=>assert.fail("protected deletes must not contact Seedr");
+  const env={DB:binding,SEEDR_MODE:"live",SEEDR_ACCESS:"full",ALLOWED_ORIGIN:"http://localhost:5173",SEEDR_ACCOUNT_CONFIG:JSON.stringify([{...account,secretKeyReference:"SEEDR_ACCOUNT_A_TOKEN"}])};
+  const session=crypto.randomUUID(),{requestOwnerHash}=require("./logic-test-build/apps/worker/src/utils/owner.js");
+  const hash=await requestOwnerHash(new Request("http://localhost",{headers:{"x-session-id":session}}));
+  for(const status of ["queued","fetching_metadata","downloading","processing","ready","failed"]){
+   const created=Date.now()-2*3600000;
+   const row=await db.create(fixture(2,{status,createdAt:new Date(created).toISOString(),cleanupAllowedAt:new Date(created+10800000).toISOString(),expiresAt:new Date(created+86400000).toISOString(),ownerSessionHash:status==="ready"?null:hash}));
+   for(const identity of [crypto.randomUUID(),...(status==="ready"?[session]:[])]){
+    const response=await worker.fetch(new Request(`http://localhost/api/downloads/${row.publicId}/delete`,{method:"POST",headers:{origin:env.ALLOWED_ORIGIN,"x-session-id":identity}}),env);
+    assert.equal(response.status,403);assert.equal((await response.json()).code,"file_protected");
+    const detail=await(await worker.fetch(new Request(`http://localhost/api/downloads/${row.publicId}`),env)).json();
+    assert.equal(detail.canDelete,false);assert.equal(detail.cleanupAllowedAt,row.cleanupAllowedAt);
+   }
+   assert.equal((await db.findByPublicId(row.publicId)).cleanupClaimedAt,null);
+   const creatorDetail=await(await worker.fetch(new Request(`http://localhost/api/downloads/${row.publicId}`,{headers:{"x-session-id":session}}),env)).json();
+   assert.equal(creatorDetail.canDelete,status!=="ready");
+   assert.ok(!JSON.stringify(creatorDetail).includes(hash)&&!JSON.stringify(creatorDetail).includes(session));
+  }
+ }finally{globalThis.fetch=original;sqlite.close();}
+});
+
+test("D1 creator bypass is atomic, works for every status and never permits premature Cron cleanup",async()=>{
+ const {sqlite,db,binding}=setup(),owner="a".repeat(64),wrong="b".repeat(64);let calls=0;
+ try{
+  await db.syncAccounts([account]);
+  const adapter={async deleteItem(){calls++;}};
+  for(const status of ["queued","fetching_metadata","downloading","processing","ready","failed"]){
+   const row=await db.create(fixture(0,{status,ownerSessionHash:owner}));
+   assert.equal(await db.claimForCleanup(row.publicId,now,"expired",owner),null);
+   assert.equal(await db.claimForCleanup(row.publicId,now,"manual",wrong),null);
+   assert.equal(await db.claimForCleanup(row.publicId,now,"manual"),null);
+   await assert.rejects(deleteSharedItem(db,adapter,row.publicId,now,wrong),e=>e.code==="file_protected");
+   const before=calls;
+   const result=await Promise.all([deleteSharedItem(db,adapter,row.publicId,now,owner),deleteSharedItem(new D1MetadataDatabase(binding),adapter,row.publicId,now,owner)]);
+   assert.equal(result.filter(Boolean).length,1);assert.equal(calls,before+1);
+   assert.equal((await deleteSharedItem(db,adapter,row.publicId,now,owner)).status,"deleted");assert.equal(calls,before+1);
+  }
+  const legacy=await db.create(fixture(0));assert.equal(await db.claimForCleanup(legacy.publicId,now,"manual",owner),null);
+  const retry=await db.create(fixture(2,{ownerSessionHash:owner}));
+  await assert.rejects(deleteSharedItem(db,{async deleteItem(){throw Error("offline");}},retry.publicId,now,owner));
+  assert.equal((await db.findByPublicId(retry.publicId)).cleanupClaimedAt,null);
+  assert.equal((await deleteSharedItem(db,adapter,retry.publicId,now,owner)).status,"deleted");
+ }finally{sqlite.close();}
+});
+
+test("D1 eligible shared deletion and Cron racing at 24h delete remotely only once",async()=>{
+ const {sqlite,db,binding}=setup();
+ try{await db.syncAccounts([account]);const row=await db.create(fixture(24));let calls=0;
+  const adapter={async deleteItem(){calls++;}};
+  await Promise.all([deleteSharedItem(db,adapter,row.publicId,now),expireDueItems(new D1MetadataDatabase(binding),adapter,now)]);
+  assert.equal(calls,1);assert.ok((await db.findByPublicId(row.publicId)).deletedAt);
+ }finally{sqlite.close();}
+});
+
 test("D1 raw provider errors never appear in public database errors", async () => {
   const db = new D1MetadataDatabase({ prepare() { throw new Error("private SQL and internal identifier"); } });
   await assert.rejects(db.listActive(), e => e.code === "database_unavailable" && !e.message.includes("private"));
