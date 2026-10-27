@@ -1,347 +1,170 @@
 <div align="center">
 
-# 📦 LinkBox
+<img src="LinkBox-Brand-Assets/01_logo/svg/linkbox-symbol.svg" alt="LinkBox logo" width="96" />
 
-### Temporary shared downloads, built for the browser
+# LinkBox
 
-**React · TypeScript · Cloudflare Pages & Workers · D1 · Seedr**
+**Temporary shared downloads, built for the browser.**
 
-[Architecture](#architecture) · [Local setup](#local-development) · [Configuration](#environment-configuration) · [Deployment](#cloudflare-pages-deployment) · [Troubleshooting](#troubleshooting)
+![React](https://img.shields.io/badge/React-149ECA?style=flat-square&logo=react&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
+![Cloudflare](https://img.shields.io/badge/Cloudflare-F38020?style=flat-square&logo=cloudflare&logoColor=white)
+
+[Open LinkBox](https://linkbox-repo.pages.dev) · [Quick start](#quick-start) · [Architecture](#architecture) · [Operations](#operations-and-deployment)
 
 </div>
 
-LinkBox is a mobile-first app for submitting magnets, tracking downloads, browsing files, and playing or downloading supported media. Downloaded files stay on Seedr; Cloudflare provides the interface, API, metadata, and scheduled cleanup.
+---
 
-## ✨ At a glance
+A mobile-first app for submitting magnets, following download progress, browsing files, and playing or downloading supported media. **Seedr holds the files; Cloudflare holds the interface, API, and metadata.** Only content created through LinkBox is shared and cleanup-managed.
 
-| Capability | What it does |
+## ✨ Features
+
+| Capability | Behavior |
 |---|---|
-| 🧲 Submit & track | Real magnet submission with progress and clear failure states |
-| 📂 Browse & download | Folder browsing, native previews, and individual file downloads |
-| ▶️ Play media | HLS or native playback when the provider and browser support it |
-| ⏳ Temporary sharing | Creator deletion anytime; shared deletion after 3 hours; expiry after 24 hours |
-| ☁️ Manage capacity | Actual Seedr quotas, metadata in D1, and private owner account controls |
-| 📱 Install as an app | PWA installation with a cached interface shell; file operations require internet |
+| 🧲 Submit and track | Magnet validation, queued progress, bounded submissions, and clear failure states |
+| 📂 Browse and download | Folder navigation, supported previews, and direct file delivery |
+| ▶️ Play media | HLS/native playback when available; external-player links for compatible devices |
+| ⏳ Temporary sharing | Creator deletion anytime, deletion by others after 3 hours, and expiry due after 24 hours |
+| ☁️ Capacity | Actual connected Seedr quotas; every item must fit within one account |
+| 🔐 Owner controls | Separate admin-key protection for account configuration |
+| 📱 PWA | Installable cached shell; file operations and playback require connectivity |
 
-## 📚 Documentation
+<a id="architecture"></a>
 
-[Local testing](LOCAL_TESTING.md) · [Seedr setup](SEEDR_LOCAL_SETUP.md) · [Production review](PRODUCTION_REVIEW.md) · [V1 verification](V1_VERIFICATION.md)
+## 🧱 Architecture
 
-## Current status
-
-LinkBox V1 supports real magnet submission, progress, folder browsing, HLS/native media playback, direct file downloads, shared deletion after a **3-hour protection period**, and automatic expiry after 24 hours. The submitting browser can delete its own download anytime; other users must wait 3 hours. The approved visual design remains unchanged. Connected accounts use their **actual Seedr quota**, not the 9.5 GB demo pool. Only downloads created through LinkBox are shared or cleanup-managed; existing personal Seedr files are not imported.
-
-**Supabase is no longer used.** Cloudflare Pages serves the frontend, Workers runs the privileged API, **D1 stores metadata**, and Worker Cron Triggers schedule cleanup. Actual downloaded files stay exclusively on Seedr. No media is stored in Pages, Workers, D1, GitHub or an R2 bucket.
-
-## Architecture
-
-```text
-Browser → Cloudflare Pages (React/Vite) → Cloudflare Worker API → Seedr
-                                              │
-                                              └→ Cloudflare D1 (metadata only)
-Cloudflare Cron (hourly) → Worker cleanup → Seedr deletion + D1 metadata
+```mermaid
+flowchart TD
+  B[Browser] --> P[Cloudflare Pages]
+  B --> W[Worker API]
+  W --> D[(D1 metadata)]
+  W --> S[Seedr API]
+  B --> M[Seedr media delivery]
+  C[Hourly Cron] --> W
 ```
 
-Pages provides a static frontend without a running server. Workers keeps tokens and privileged operations off the browser. D1 provides persistent, Worker-bound metadata without a database password or another provider. Cron calls the same protected, idempotent cleanup service.
+Media is delivered directly from Seedr. No media files are stored in Workers, D1, GitHub, or R2. Supabase is not used by the current runtime.
 
-## Project structure
+<a id="quick-start"></a>
 
-```text
-apps/web/                    React, Vite, TypeScript, Tailwind and brand assets
-apps/worker/src/database/    D1 implementation; in-memory mock implementation
-apps/worker/src/seedr/       Mock/live adapters, verified PAT API and ownership checks
-apps/worker/src/cleanup/     Protected shared deletion and automatic expiry logic
-apps/worker/migrations/      Active Cloudflare D1 SQLite migrations
-apps/worker/wrangler.toml    Local/production D1 bindings, vars and hourly Cron
-packages/shared/            Public API types (no tokens or internal account IDs)
-scripts/                    Private Seedr connection/setup helpers
-supabase/migrations/        Historical unused SQL only; DO NOT apply it
-```
+## 🚀 Quick start
 
-The old Supabase runtime adapter and environment requirements were removed. Historical SQL is retained locally for reference, not run or deployed. Existing private config may still contain unused old values; the app does not read them. Cloudflare D1 `linkbox-metadata` was created for this application and its active migration applied on 2026-10-04.
+Requirements: **Node.js 22.13+** with `node:sqlite` support and npm; the Pages build is configured for Node 24. The checked-in local Worker defaults to **mock mode**.
 
-## Local development
-
-Use a current supported Node.js version with `node:sqlite` (Node 22.13+ or newer) and npm. This project's SQL tests run directly against SQLite without installing another database package.
-
-```powershell
+```bash
+git clone https://github.com/Vignesh-S-GitHub/linkbox_repo.git
 cd linkbox_repo
-npm ci --cache .npm-cache
+npm ci
 npm run db:migrate:local
 npm run dev
 ```
 
-Open `http://localhost:5173`; API: `http://localhost:8787`. Keep the terminal open. Stop an existing dev session before restarting on those ports.
+Open **http://localhost:5173** · Worker API: **http://localhost:8787**.
 
-The migration command is **local only**, needs no Cloudflare login, and initializes the D1 database in ignored Wrangler state. Local D1 persists across restarts; do not delete `apps/worker/.wrangler/state` if you need that metadata. No tables are reset automatically. Mock mode deliberately uses in-memory synthetic metadata/files instead of the live D1 database, and resets on restart.
+Mock mode requires no provider credentials and uses synthetic in-memory files and metadata, reset on restart. It does not prove real provider download or media delivery. Live mode uses the local D1 state under `apps/worker/.wrangler/state`; the local migration command does not touch production.
 
-If `spawn EPERM` prevents helper processes from running inside an agent session, run these standard commands in normal PowerShell. Do not disable security software or bypass process restrictions.
+## 🔑 Connect a live account
 
-See [LOCAL_TESTING.md](LOCAL_TESTING.md) for the UI checklist.
-
-## Seedr credentials and actual-account storage
-
-Never paste your token into chat or a `VITE_` variable. To replace the old token with your new token privately:
+From a Windows PowerShell terminal:
 
 ```powershell
+npm run seedr:check
 npm run seedr:configure
 ```
 
-The hidden prompt verifies quota before atomically saving the token to ignored `apps/worker/.dev.vars`. It configures one enabled account with `SEEDR_MODE=live` and `SEEDR_ACCESS=full`, using actual `space_max` capacity. Required scopes are `account.read`, `files.read`, `files.write`, `tasks.read`, `tasks.write`, and `media.read`. Restart dev afterwards. `SEEDR_ACCESS=storage-only` remains an explicit emergency read-only switch that disables file actions and Cron.
+The private setup helper verifies quota and writes the token to ignored `apps/worker/.dev.vars`. Restart development afterward. Other environments can follow the configuration fields in [Seedr setup](SEEDR_LOCAL_SETUP.md); the npm convenience commands use PowerShell.
 
-`npm run seedr:check` performs a private, non-persistent quota diagnostic. Neither command changes or deletes Seedr files. A non-expiring full-access token is especially sensitive: use only the required scopes where possible and revoke/rotate it if exposed. An account-wide token does not authorize the app to delete your existing personal files.
+| Setting | Role |
+|---|---|
+| `SEEDR_MODE` | `mock` or `live` |
+| `SEEDR_ACCESS` | `full`; `storage-only` disables writes and cleanup |
+| `SEEDR_ACCOUNT_CONFIG` | Internal account metadata and secret-name references |
+| `SEEDR_ACCOUNT_A_TOKEN` | Private provider token in Worker secrets/local ignored vars |
+| `DB` | D1 binding, configured in Wrangler |
+| `ALLOWED_ORIGIN` | Exact frontend origin |
+| `VITE_API_URL` | Public Worker URL; never a provider token |
 
-[SEEDR_LOCAL_SETUP.md](SEEDR_LOCAL_SETUP.md) covers token setup. D1 does not store the token, only its secret-key reference.
+[.env.example](.env.example) documents the sanitized settings. Required provider scopes are `account.read`, `files.read`, `files.write`, `tasks.read`, `tasks.write`, and `media.read`. Keep the actual token out of source and frontend variables.
 
-## Mock mode
+## ⏳ Lifetime and deletion
 
-Set `SEEDR_MODE=mock` in local Worker vars to use credential-free fixtures. The demo models 5 GB + 4.5 GB accounts, 6.2 GB used, progress, readiness, folder browsing, synthetic previews, playback availability, download and deletion. No real torrents are fetched. Its five files have generic fixture names.
+- A browser-local private identifier recognizes the creator; it is not an account login or cross-device identity.
+- The creator may delete immediately. Other visitors wait **3 hours**, then use the confirmed Delete action.
+- At **24 hours**, delivery is blocked and cleanup becomes due. Hourly Cron handles bounded batches; outages or backlogs can delay physical deletion.
+- Items cannot span accounts, even if combined free capacity is sufficient. Unknown-size magnets cannot be guaranteed to fit before metadata resolves.
+- Cleanup checks ownership and is limited to app-managed files/tasks. Existing personal Seedr folders are not imported.
 
-```text
-magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Sample%20Video.mp4&xl=1073741824
-```
+Keep disabled accounts and their token bindings configured until their existing files are cleaned up. `storage-only` mode disables Cron deletion too.
 
-Use this synthetic hash only in mock mode. Mock downloads are labelled text fixtures, previews are synthetic, and playback uses an external CC0 sample. None proves live file delivery.
+## 🔐 Owner account management
 
-## Storage and lifetime
-
-- Live single-account storage uses the actual connected quota.
-- The 9.5 GB logical pool exists only in the original two-account mock configuration.
-- An entire item must fit one account; combined free space is never treated as contiguous.
-- Known-size account selection uses best fit. Seedr has no documented size-only magnet preflight: unknown-size tasks choose the account with most free space, one transferring item per account, and rely on Seedr to reject an item that cannot fit. `xl` is never trusted. After metadata resolves, oversized app-owned content is stopped/removed and marked failed. Exact requested/free/shortfall numbers are shown only when size is known; unknown-size errors say metadata is pending.
-- Downloads are protected from other users for 3 hours. The creator can delete anytime using the same private browser session. After 3 hours anyone can delete, with the existing confirmation. At 24 hours, automatic deletion is due.
-- When storage is full, open Files to delete an eligible item or wait for protection/expiration. The obsolete `POST /api/downloads/:id/cleanup` endpoint remains removed (404); the single Delete endpoint enforces the 3-hour lock.
-- D1 enforces lifecycle timestamps, foreign keys, status/progress constraints and active-magnet uniqueness.
-- One conditional SQL `UPDATE … RETURNING` atomically claims cleanup across Worker instances.
-- Progress updates cannot undo claims or resurrect deleted records.
-- Cleanup errors release only their own claim. A claim abandoned for 5 minutes is atomically reclaimable; missing tasks/folders are successful idempotent cleanup. One outage does not skip other due items.
-- Hourly Cron selects up to 8 expired records. Normal cleanup occurs within approximately one cycle after 24 hours; outages may delay removal. Expired playback/download access is blocked immediately even before physical removal.
-
-D1 stores only account metadata and app-managed download records. User-facing API responses explicitly omit internal account IDs, remote IDs, secret references and tokens.
-
-For compatibility with already-applied migrations, the legacy `cleanup_allowed_at` column and its historical constraint remain populated internally. They no longer control any operation and are omitted from public API responses. No destructive table rebuild or new migration is needed. Automatic claims require `expires_at <= now`; manual claims require the matching owner digest.
-
-## Cloudflare D1 setup
-
-The connected account already has `linkbox-metadata`, bound as `DB` in both Wrangler environments. Do not create a duplicate database. For a different Cloudflare account, use:
+**Settings → Accounts** requires a separate high-entropy admin key. The raw key stays in browser memory and the Worker stores its hash as `LINKBOX_ADMIN_KEY_SHA256`.
 
 ```powershell
-cd apps/worker
-npx wrangler login
-npx wrangler d1 create linkbox-metadata
+npm run admin:setup
+# For the deployed Worker:
+npm run admin:setup:production
 ```
 
-For a different account, replace `account_id` and **both** `database_id` values in `wrangler.toml` with the newly created database's UUID. Set the correct production Pages URL for `ALLOWED_ORIGIN`. The bindings are named `DB`; production repeats them because environment bindings are not inherited. Never set `remote=true` for routine local testing.
+For another account, create a different Worker secret name for that account's token, then verify/connect its secret reference in the owner UI. Do not register a second token for the same provider account: it can double-count capacity. See [production review](PRODUCTION_REVIEW.md) and [local testing](LOCAL_TESTING.md).
 
-Then apply the active D1 migration remotely:
+<a id="operations-and-deployment"></a>
 
-```powershell
-cd linkbox_repo
+## 🌐 Operations and deployment
+
+| Component | Configuration |
+|---|---|
+| Pages | Build `npm run build --workspace=@temporary-share/web`; output `apps/web/dist` |
+| Public API URL | `VITE_API_URL` must match the Worker hostname |
+| Worker | [apps/worker/wrangler.toml](apps/worker/wrangler.toml), production environment |
+| D1 | `linkbox-metadata`, binding `DB`; migrations under `apps/worker/migrations/` |
+| Cleanup | Hourly `0 * * * *` Cron; active only with live full access |
+
+For an existing configured account, apply pending migrations before a Worker release:
+
+```bash
 npm run db:migrate:remote
-```
-
-Do not run the historical PostgreSQL migration. No Supabase URL, API key, service-role secret, Storage bucket or project is needed.
-
-## Worker deployment and secrets
-
-From `apps/worker`:
-
-```powershell
+cd apps/worker
 npx wrangler secret put SEEDR_ACCOUNT_A_TOKEN --env production
 npx wrangler deploy --env production
 ```
 
-Enter the token at Wrangler's private prompt. Production V1 uses `SEEDR_MODE=live`, `SEEDR_ACCESS=full`, one actual account and hourly Cron. Its allowed origin is `https://linkbox-repo.pages.dev`. Apply all D1 migrations **before** deploying changed Worker code. For read-only operation explicitly set `SEEDR_ACCESS=storage-only` and redeploy.
+For a new Cloudflare account, create your own D1 database and replace the account/database IDs in **both** Wrangler environments first. Keep Worker `ALLOWED_ORIGIN`, frontend `VITE_API_URL`, and `apps/web/public/_headers` CSP in agreement. Pages deployment does not deploy the Worker.
 
-D1 uses a platform binding, not a public database endpoint. The Pages frontend has no direct D1 access. Worker secrets hold credentials; D1 stores only references.
+## 🧪 Development checks
 
-## Cloudflare Pages deployment
-
-After successful local checks, push the source to GitHub without ignored secrets/state. Create a Cloudflare Pages project from the repository:
-
-```text
-Root directory: /
-Build command: npm run build --workspace=@temporary-share/web
-Build output directory: apps/web/dist
-Public environment: VITE_API_URL=https://temporary-seedr-share-api.vigneshshanmugam.workers.dev
-Node version: 24 (NODE_VERSION environment variable)
-```
-
-Set Worker `ALLOWED_ORIGIN` to the exact Pages origin. Frontend public variables must never contain Seedr or Cloudflare credentials.
-
-`.github/workflows/quality.yml` checks lint, types, all tests and both production builds on pull requests and main changes. It needs no Seedr/Cloudflare secrets. Pages performs frontend auto-deploy from GitHub; Worker source changes must be deployed separately with the command above. Pages build success alone does not deploy the Worker.
-
-## Cron configuration and testing
-
-Default and production configuration both specify `0 * * * *` (hourly UTC). The Worker `scheduled()` handler performs database selection, atomic claims, Seedr deletion and metadata/storage updates. **Storage-only mode returns without cleanup**; it does not touch personal files.
-
-For a separate local Cron test, stop the running Worker first:
-
-```powershell
-cd apps/worker
-npm run dev:cron
-# In another terminal:
-Invoke-WebRequest 'http://localhost:8787/__scheduled?cron=0+*+*+*+*'
-```
-
-Use mock mode for safe synthetic cleanup tests. In current Wrangler, you can also invoke the local handler at `http://localhost:8787/cdn-cgi/local/scheduled`. Do not alter production timestamps to speed up testing. Live Cron deletes only expired, ownership-verified LinkBox folders/tasks.
-
-## Environment configuration
-
-`.env.example` contains sanitized Worker settings. `apps/worker/.dev.vars` is private/ignored; keep existing tokens there, never in source or examples.
-
-| Setting | Purpose |
-| --- | --- |
-| `DB` | D1 binding in Wrangler; not an environment secret |
-| `SEEDR_MODE` | `mock` or `live` |
-| `SEEDR_ACCESS` | `full` for V1; `storage-only` explicitly disables file operations/Cron |
-| `SEEDR_ACCOUNT_CONFIG` | Internal account metadata and secret references |
-| `SEEDR_ACCOUNT_A_TOKEN` | Private Seedr PAT in Worker secrets |
-| `ALLOWED_ORIGIN` | Exact permitted frontend origin |
-| `MAX_FILE_SIZE_BYTES` | Maximum entire item size |
-| `MAX_ACTIVE_DOWNLOADS` | Shared active-submission cap, default 8 |
-| `SUBMISSION_COOLDOWN_SECONDS` | D1-backed 30-second session/IP cooldown |
-| `TURNSTILE_SECRET_KEY` | Optional server verification; keep unset unless a frontend token is supplied |
-| `VITE_API_URL` | Public Worker URL only |
-
-## Adding another Seedr account
-
-**Settings → Accounts is a private owner-only section.** Public visitors see no account list, names, identifiers or tokens. Unlocking requires a separate private admin key; your Seedr PAT is never entered in the website.
-
-First, apply the metadata migration and configure owner access from your local repository:
-
-```powershell
-cd linkbox_repo
-npm run db:migrate:remote
-npm run admin:setup:production
-```
-
-The helper prompts with hidden input. Choose a unique random 32–128 character key from your password manager (letters, numbers, `.`, `_`, `~`, `-`), save it securely, and never send it in chat. It uploads only its SHA-256 digest as the Worker Secret `LINKBOX_ADMIN_KEY_SHA256`. The raw key is never saved locally or passed on the command line. Use HTTPS for deployed admin access. The browser keeps the key in memory only; leaving Accounts, hiding the tab, pressing Lock, or 10 minutes of inactivity locks it. No persistent admin login is created. Reset/rotate it by running the helper again. Other browsers and unauthorized requests cannot manage accounts.
-
-To connect a **different** Seedr account:
-
-```powershell
-cd apps/worker
-npx wrangler secret put SEEDR_ACCOUNT_B_TOKEN --env production
-```
-
-Paste the PAT only into Wrangler's private prompt, not Settings, source code or a terminal command argument. It needs the same documented scopes as the first account. Then open Settings → Accounts, unlock, enter a label and **secret name** `SEEDR_ACCOUNT_B_TOKEN`, confirm it belongs to a different account, and choose **Verify & connect account**. The Worker reads the verified official quota endpoint and saves actual capacity. The public storage total automatically includes enabled accounts; a single file still must fit wholly on one account. Use unique secret names for accounts C/D/etc.
-
-Only metadata (label, enabled flag, actual capacity and secret reference) is stored in D1's `account_configuration` table. Credentials remain in Worker Secrets. The existing Wrangler account is the baseline; D1 overrides its enabled flag and adds accounts. Redeploying does not discard these additions. Changes serialize with submissions/deletions using the existing D1 lease. Identical tokens under different secret names are rejected; the verified quota response does **not** identify an account, so two different tokens for the same account cannot be detected automatically. The distinct-account confirmation is required to avoid double-counting. Do not register another PAT for an existing account.
-
-**Accept new downloads** disables admissions only. Existing downloads remain playable/downloadable, deletable anytime by their creator or after 3 hours by others, and eligible for 24-hour Cron expiry. Keep disabled accounts' secrets until all their files expire; do not delete/rename those bindings. At least one account must stay enabled. Refresh performs at most one quota request per enabled account and is throttled to 15 seconds; ordinary public storage remains cached for 60 seconds. Account removal/token editing in the browser is deliberately not supported.
-
-For local owner testing, run `npm run admin:setup`, add the additional PAT privately to ignored `apps/worker/.dev.vars` under the matching secret name, and restart the Worker. Local D1 and production D1 are separate: connecting an account locally does not connect it in production. Mock mode uses simulated quota and files, never requests Seedr, and resets metadata on restart; synthetic secret values can be used for mock account tests.
-
-Full mode handles up to 8 configured accounts without rewriting selection logic. IDs and token references must be distinct, and capacities must be positive whole byte counts. Keep disabled accounts and their credentials configured until their old records are cleaned; removing an account or token immediately prevents cleanup of those records. No individual download spans accounts.
-
-Without `LINKBOX_ADMIN_KEY_SHA256`, the Accounts page stays locked with a setup message; ordinary file functionality is unchanged. Failed key attempts are throttled per hashed IP for 15 seconds. Admin mutations require the exact allowed origin and a valid Bearer key. Account responses are whitelist-only and never include the hash or PAT. Use a high-entropy key, not an ordinary password; SHA-256 is appropriate here for random access keys, not low-entropy password storage.
-
-## Switching mock → full live
-
-The signed-in [official Seedr API reference](https://www.seedr.cc/api/v0.1/console/documentation), inspected on 2026-10-04, documents PAT Bearer authentication at `https://www.seedr.cc/api/v0.1/p`, quota reads, tasks, filesystem operations and temporary delivery URLs. Quota field names, byte counts and actual account access have been tested.
-
-Task/folder mapping, temporary delivery and ownership-scoped deletion were verified with a Creative Commons sample. Each download gets an isolated `LinkBox-<public UUID>` folder. D1 admission is persisted before Seedr writes; folder/task IDs are checkpointed before subsequent operations. Uncertain POSTs are reconciled by the exact owned folder rather than blindly replayed. Use the hidden setup helper, apply local migrations, start dev, then test an authorized magnet.
-
-### Verified API and limitations
-
-#### Unknown size, rejected tasks and metadata timeouts
-
-Live magnets have no documented authoritative size-only preflight. A valid magnet can therefore be submitted with size still unknown; `0 B` is not an actual measured file size. Magnet `xl` hints are untrusted and are never used as proof that a file fits. Once Seedr supplies size, LinkBox checks both the configured maximum and the selected account's actual cached quota capacity, never the sum of accounts. An 8 GB item cannot fit a 5 GB or 4.5 GB account even when combined storage is 9.5 GB.
-
-Confirmed HTTP/JSON rejections become **Failed** immediately. An empty owned folder with no matching task gets a five-minute admission grace period, then becomes **Failed** rather than looping forever. Unknown zero-size/zero-progress metadata admission times out after fifteen minutes, including repeated provider errors. These deadlines are checked during normal progress polling; they are not precise background timers. Real downloads with resolved size/progress are not cancelled merely for having few peers. Missing tasks and metadata timeouts do not delete provider content automatically: the owner can use **Delete**, and the existing 24-hour Cron expiry remains in effect. Delete a failed record before resubmitting the same magnet.
-
-Known oversized tasks are stopped only beneath their verified LinkBox-owned folder, under the same atomic D1 cleanup claim used by manual deletion and Cron. A failure to remove provider content is clearly reported and retains the record for shared deletion after 3 hours or Cron retry. Failed rows have no animated progress timeline, show a safe reason directly in the list and details, and unknown size is labelled **Size unknown**. No new Seedr endpoint, credential access, media proxy or paid service is added.
-
-#### Delete a mistakenly added magnet
-
-Open the file's menu (⋮) or its progress page. The submitting browser gets the single red **Delete** action immediately. Other browsers see **Protected** and the remaining wait during the first 3 hours; afterward any browser can delete. Confirming stops the task and deletes the entire LinkBox-managed download, including its folder contents and shared access. This is permanent, not an undo/trash feature. There is no “Not available” menu action; unavailable files still have a real error page.
-
-### Original-quality external playback
-
-For a ready individual file, open its menu (⋮) and choose **Copy download link**. For a folder, open it first and use the video file's menu. Paste the copied URL into your external player's network-stream field; in VLC desktop use **Media → Open Network Stream → paste → Play** ([official VLC instructions](https://docs.videolan.me/vlc-user/desktop/3.0/en/basic/media.html)). This is the original-file delivery URL, not the lower-resolution HLS preview or a Seedr API/PAT authentication URL. The existing Worker download endpoint checks membership, readiness and expiry before issuing it; media remains direct from Seedr.
-
-Original resolution/audio tracks depend on the source file and your external player's codec support and connection. Copying a URL does not upscale or transcode it. Links are temporary bearer capabilities: keep them private, copy a fresh one if Seedr expires it, and download before the 24-hour deadline. **Share** still shares the LinkBox page, not this direct file URL. Clipboard failures show a safe inline error; URLs are never logged or saved to browser storage. Folder-wide archive links are not invented.
-
-Ready video/audio file menus also have **Open in external player**. On Android Chrome, opening the menu prepares the same original download URL with one cancellable metadata request; clicking the action sends a media-typed Android intent to a compatible installed player. A player chooser may appear depending on installed apps/defaults. No API token, media proxy, transcoding, forced player package or saved URL is involved. If no player opens, use **Copy download link**; unsupported browsers (including desktop/iPhone) use that existing clipboard fallback directly. Actual OS app launching depends on the device and installed players, not only on the website. Mock downloads remain synthetic fixtures, not real external-playable media. The inbuilt player and other actions are unchanged. See [Chrome intent guidance](https://developer.chrome.com/docs/android/intents) and [VLC's browsable media intent filters](https://raw.githubusercontent.com/videolan/vlc-android/master/application/vlc-android/AndroidManifest.xml).
-
-Any browser can use `POST /api/downloads/:id/delete` once `cleanup_allowed_at` (creation + 3 hours) is reached. Before then, only the submitting browser can delete, verified by its private session UUID against the stored SHA-256 owner digest. Other browsers receive `403 file_protected`, including for failed/pending downloads. The atomic database claim rechecks this permission. Existing dates remain unchanged; legacy records without an owner digest cannot claim creator access. Clearing browser data or changing devices loses immediate deletion access. Anonymous sessions remain required for request limiting. Responses expose only the safe deadline and request-specific `canDelete` eligibility, never the session UUID or digest.
-
-The Worker checks creator ownership or age, and D1 atomically rechecks that permission when claiming deletion. Repeated requests are idempotent, competing requests do not double-delete, failed provider deletion remains retryable, and deletion is blocked while a submission is still being admitted/checkpointed. Cron still claims only downloads expired after 24 hours. Existing automatic rejection/removal of unsupported oversized tasks is unchanged. No login, paid service, new Seedr endpoint, migration or account-wide deletion is introduced. This is shared storage: another visitor may permanently remove an eligible download, so save anything you need promptly.
-
-- API Console's **endpoint form** documents `POST /tasks` JSON fields `torrent_magnet` and `folder_id`. Its generic code example uses obsolete `url` / `save_folder_id`; those returned HTTP 422 and are not used.
-- `POST /fs/folder` uses `name` / `parent_id`. The task's `folder_id` must match the isolated parent; completed content is traversed only beneath that parent. IDs are not interchangeable.
-- `GET /download/file/{id}/url` returns a temporary URL. Documented `GET /presentation/fs/item/{id}/video/url` returns HLS; browser playback lazy-loads the **full HLS.js build**, including alternate audio and subtitles, with native play/pause/seek controls. The previous light build omitted separate audio renditions; Sintel's real stream has one and requires the full build. No media proxy is used. Modern `/presentations/file/{id}/video` returned HTTP 400 in the test, so the working documented compatibility endpoint is used.
-- Folder/type metadata is provider-confirmed, not guessed from dots in the torrent title. `0003_content_type.sql` adds nullable kind/count columns; old ready records are backfilled by read-only owned-folder contents, at most two per request, once successful, with a five-minute retry lease. Lifetimes and Seedr files are unchanged. SQLite's non-STRICT integer affinity preserves decimal progress; tests cover 1.6% and 6.15%. Pending tasks retain Seedr's numeric percentage, with visible-tab polling every 15 seconds and a slow-peer explanation (not an invented ETA or peer count).
-- The player uses **built-in browser controls only**, per the final design request. There is no separate Audio/Quality panel, explanatory note, custom toolbar, or subtitle uploader. Play/pause, seeking, volume, fullscreen and any other built-in menu features are browser-dependent. HLS adapts quality automatically using only supplied stream variants. Native browser controls generally do not expose HLS quality or language selection; no artificial choices or external selectors are added.
-- Browser/platform codec support still governs sound. The full HLS build handles separate AAC tracks; it cannot make an absent audio stream or unsupported Dolby codec playable. The stream may offer fewer audio languages or quality levels than the original file. This app does not transcode, invent resolutions, or promise all features of Seedr's own player. Native iOS volume may use system controls.
-- The full HLS chunk is approximately 185 KB gzip, downloaded only on playback. Vite can report its >500 KB uncompressed chunk warning; this is an intentional existing-library capability tradeoff, not a failed build. Home/Files do not load the player library.
-- Whole-folder archive initialization has an undocumented request-body schema; V1 offers **individual file downloads** instead of inventing ZIP requests. Folder entries are flattened, bounded to 8 folders / 1,000 files; exceptionally large/deep trees fail safely.
-- Each invocation allows at most 48 authenticated Seedr API requests. The optional verification request or body-free delivery HEAD check still keeps the invocation below the free Worker's 50 external-subrequest limit. Unusually expensive reconciliation/cleanup resumes on a later polling or Cron cycle rather than exceeding that budget. Provider outages can delay physical deletion; delivery is blocked as soon as the 24-hour deadline passes.
-- Supported media is determined by Seedr's file flags; codecs, transcoding readiness and plan restrictions can still prevent playback. Images/PDFs use direct native previews when the browser supports them; other files remain downloadable.
-- Expiring Seedr delivery URLs are bearer capabilities. They contain no account PAT, but anyone receiving a copied temporary URL may use it until Seedr expires it. Already-issued direct links cannot be instantly revoked by D1; deleting the source removes the file.
-- Seedr issued URLs returning 404 for the sample's subtitle/poster sidecars while its video worked. Download/preview delivery now verifies availability with a body-free HEAD request and shows a safe error for unavailable files. No account token is sent to the CDN, and no file body passes through the Worker. Listing a file does not guarantee Seedr can deliver it.
-- All files placed inside an app-owned folder are temporary/shared. Do not manually move personal content into these folders or rename them; ownership mismatches fail closed. D1 backups do not restore deleted Seedr media.
-- Optional Turnstile is architected/server-verified, not enabled by default. If enabled, clients must supply `turnstileToken`; no widget is configured for this release. CORS is not authentication and public anonymous access cannot be made abuse-proof with cooldowns alone.
-
-## Security and remaining production work
-
-Magnet validation, bounded request bodies, CORS, public UUIDs, safe errors, duplicate constraints, cleanup validation and server-only tokens are implemented. Anonymous browser identifiers contain no requested email, name, phone or location. Polling is 15 seconds for pending transfers, otherwise 60 seconds, only while visible.
-
-Submission leases, cooldowns (hashed session and daily hashed Cloudflare IP), and polling leases are durable in D1 across isolates. Active downloads are capped at 8; request bodies and provider JSON are bounded, redirects never forward PATs, and all public IDs are opaque. Only app-managed metadata/files are exposed. Ready-state polling stops, quota is cached for 60 seconds, and at most two transferring rows are refreshed per request. Guard rows are pruned by Cron. This is a shared anonymous service: monitor quotas, restrict the allowed origin and use the read-only switch if abuse occurs. Avoid non-expiring account-wide tokens where a short-lived narrowly scoped PAT suffices.
-
-## Free-tier considerations
-
-Use Cloudflare Workers Free and D1 Free; no paid plan, queue, always-on server or R2 bucket is necessary for this metadata-only architecture. Current D1 free allowances are **5 million rows read/day, 100,000 rows written/day and 5 GB total storage**. Exceeding free quotas causes errors rather than making free usage unlimited. Indexes, small metadata records and bounded polling help keep light usage within them. Check [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/) and [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) before launch.
-
-Seedr plan capacity and API feature eligibility are separate. No ₹0 guarantee can override provider quotas, Seedr plan restrictions or changing terms. All multi-gigabyte media delivery must remain direct from Seedr.
-
-## Quality gate
-
-```powershell
+```bash
 npm run lint
 npm run typecheck
 npm test
 npm run build
 ```
 
-Tests include existing mock API/business coverage, private-token setup, and real SQLite execution of the D1 schema/queries: account upserts, constraints, injection-safe bindings, exact 3-hour protection and shared deletion, removed legacy cleanup routes, exact 24-hour expiry, duplicate prevention, concurrent cleanup, stale progress, failed cleanup retry and idempotent expiry. SQLite tests do not replace Wrangler-runtime and credential-dependent end-to-end tests.
+[quality.yml](.github/workflows/quality.yml) runs the configured quality checks. Tests include mock behavior and real SQLite execution of D1 schema/queries; provider-dependent delivery still needs a live-account check. [V1 verification](V1_VERIFICATION.md) and [production review](PRODUCTION_REVIEW.md) record the tested scope and limits.
 
-## Troubleshooting
+## 📱 Offline use and troubleshooting
 
-- D1 unavailable: run `npm run db:migrate:local`, check the `DB` binding and restart dev.
-- Live storage but no files: expected in storage-only mode; no mock or personal files are imported.
-- Storage 503: check the private PAT/config; manual redirects are rejected and tokens never forwarded.
-- Fragmented storage: a file must fit one account even when aggregate free space looks sufficient.
-- Old file pending cleanup: Cron runs hourly; provider outages retry next cycle and stale claims recover after 5 minutes. Storage-only never deletes.
-- Build/migration `spawn EPERM`: run the normal commands in user PowerShell and report the output; do not bypass security.
+Only the public app shell and brand assets are cached. API responses, signed delivery URLs, file lists, and media are not cached; an offline cold launch is not a file backup. Updates wait until windows close or you explicitly reload.
 
-## Install LinkBox as an app
+| Symptom | Check |
+|---|---|
+| D1 unavailable locally | Run local migrations, check `DB`, and restart |
+| Live quota but no files | Personal files are intentionally not imported; check access mode |
+| Item cannot fit | Check a single account's available capacity |
+| Unconfirmed submission/deletion | Inspect Files before retrying; writes are not automatically retried |
+| Old item awaiting removal | Check full access, hourly Cron, account secrets, and provider availability |
 
-After this update is deployed, open **Settings → LinkBox app**. On compatible browsers, **Install LinkBox** opens the browser's installation prompt. When the browser does not offer a prompt, **How to install** shows platform instructions:
+## 📁 Repository guide
 
-- Android: Chrome menu → Install app / Add to Home screen.
-- iPhone / iPad: Safari → Share → Add to Home Screen → Add.
-- Windows: Edge or Chrome → address-bar install icon or browser's Install app menu.
+[apps/web/](apps/web/) — frontend and branding · [apps/worker/](apps/worker/) — API, D1, provider adapters, and cleanup · [packages/shared/](packages/shared/) — public types · [scripts/](scripts/) — private setup and regression helpers.
 
-This is a progressive web app (PWA), not a Play Store, App Store or Microsoft Store package. HTTPS is required, except for localhost testing. Install prompts and standalone behaviour depend on the browser/device; the in-app testing browser may show only manual instructions. See [MDN installability guidance](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Making_PWAs_installable).
+Use only content you are entitled to download and share. Provider eligibility, storage capacity, and Cloudflare quotas apply independently; this architecture does not guarantee unlimited free service.
 
-The approved website logo and theme remain unchanged. Installed-app icons use padded, opaque 192px/512px exports with both regular and maskable manifest entries, plus a 180px Apple touch icon. The complete cloud and box point fit inside the central circular safe area; tests check every export. See [app-icon asset notes](apps/web/public/brand/02_app_icons/APP-ICON-NOTES.md). No additional paid service or PWA library is required. `npm run build` generates a versioned service worker from the public template and the hashed Vite assets. Registration is disabled on the Vite development server; use a production build/preview or Pages to test installation.
+## 🤝 Contributing
 
-An existing installation may retain its old launcher icon until the browser/OS updates it. After deploying, first reopen the app and accept its available update. If the icon still remains old, reinstall only after finishing any creator-only actions you need: uninstalling or clearing local data can lose the private browser session used for immediate deletion. This does not change the 3-hour shared-deletion deadline or 24-hour expiry.
+Open an issue with a reproducible example or submit a focused pull request. Keep setup instructions and documentation aligned with any behavior changes.
 
-### Offline, updates and privacy
+## 📄 License
 
-Only the public HTML/JS/CSS shell, manifest and brand images are cached. **API responses, file lists, account information, signed delivery URLs and downloaded/streamed media are never cached by the service worker.** API requests remain `no-store`. File operations, fresh storage counts and playback require internet. Last-known information is retained in memory on outages and labelled as potentially out of date; it is not an offline file backup. An offline cold launch has no saved file list.
-
-New app versions wait until old windows close, or until you choose **Settings → Update app & reload**. Finish submissions/playback before requesting an update. No update automatically reloads an active video. If you intentionally activate an update, other open app windows may need a reload, especially offline. Static cache size is bounded; browser storage eviction can remove it at any time.
-
-Manual deletion is available immediately to the submitting browser and to any browser after the 3-hour protection period; switching profiles/devices does not grant creator access. Installed apps may use a separate storage context for appearance and request-limiting identifiers. Do not share the browser identifier or private admin key. Admin authentication remains in memory and locks when the page is hidden. Automatic cleanup still runs after 24 hours.
-
-### Production review and maintenance
-
-See [PRODUCTION_REVIEW.md](PRODUCTION_REVIEW.md) for the review scope, verified checks and remaining operational limits. Progress polling now selects the least recently polled pending records instead of repeatedly favouring newest files. Browser refreshes are deduplicated, cancellable and cannot overwrite a newer local add/delete. Quota failures do not erase successful file-list responses. Reads time out after 60 seconds, writes after 120 seconds; uncertain writes are never automatically retried. Check Files before retrying an unconfirmed submission/deletion. Repeated full-storage submissions also consume the existing cooldown.
-
-Cloudflare Pages uses `apps/web/public/_headers` for CSP, clickjacking protection, MIME protection and referrer policy. If you change the Worker hostname, update its `connect-src` allowlist together with `VITE_API_URL` and Worker `ALLOWED_ORIGIN`. No media is proxied through Pages or Workers. CSP allows the documented Seedr delivery hosts and HTTPS native media; do not loosen it to accept arbitrary scripts.
-
-Three build-tool patches are temporarily enforced using npm overrides: `source-map-js@1.2.2`, and Miniflare's `sharp@0.35.5` / `undici@7.29.1`. This fixes the reviewed [source-map advisory](https://github.com/advisories/GHSA-68fv-2mgg-jv7q), [sharp advisory](https://github.com/advisories/GHSA-wq5f-xc86-pv6w) and [Undici security fixes](https://github.com/nodejs/undici/releases/tag/v7.29.1), without migrating Vite, React or Wrangler. Remove these temporary pins when upstream dependencies include equivalent fixes, then rerun all checks. CI now runs `npm audit --audit-level=high`; this is a point-in-time vulnerability check, not a guarantee against future advisories.
+No repository-level `LICENSE` file is currently included.
